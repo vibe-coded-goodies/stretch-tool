@@ -1,0 +1,2017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Stretch — Plane-Based Mesh Deformer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root{
+    --bg: #0b0d10;
+    --panel: #12161b;
+    --line: #262c33;
+    --text: #e8ecef;
+    --dim: #7a8590;
+    --plane-a: #5eebd8;
+    --plane-b: #ff6ec7;
+    --accent: #f4b03e;
+    --danger: #ff6b6b;
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; height:100%; background:var(--bg); color:var(--text); font-family:var(--font-display); overflow:hidden; }
+  #app{ display:flex; width:100%; height:100%; }
+  #viewport{ flex:1; position:relative; }
+  #viewport canvas{ display:block; width:100%; height:100%; }
+
+  #panel{
+    width:308px; min-width:308px; height:100%; background:var(--panel);
+    border-right:1px solid var(--line); overflow-y:auto; padding:20px 18px 40px;
+  }
+  #panel::-webkit-scrollbar{ width:8px; }
+  #panel::-webkit-scrollbar-thumb{ background:var(--line); }
+
+  h1{
+    font-size:15px; font-weight:600; letter-spacing:0.02em; margin:0 0 2px;
+  }
+  .sub{ font-size:11px; color:var(--dim); margin:0 0 22px; line-height:1.5; }
+
+  .section{ margin-bottom:22px; }
+  .section-title{
+    font-size:10px; text-transform:uppercase; letter-spacing:0.12em; color:var(--dim);
+    margin:0 0 10px; display:flex; align-items:center; gap:8px;
+  }
+  .section-title::after{ content:""; flex:1; height:1px; background:var(--line); }
+
+  .row{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+  .row label{ font-size:12px; color:var(--text); }
+  .val{ font-family:var(--font-mono); font-size:11px; color:var(--dim); min-width:54px; text-align:right; }
+  .val-wrap{ display:flex; align-items:center; gap:2px; min-width:54px; justify-content:flex-end; }
+  .val-input{
+    font-family:var(--font-mono); font-size:11px; color:var(--dim); text-align:right;
+    background:transparent; border:1px solid transparent; border-radius:2px;
+    width:44px; padding:1px 3px; -moz-appearance:textfield;
+  }
+  .val-input::-webkit-outer-spin-button, .val-input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+  .val-input:hover{ border-color:var(--line); }
+  .val-input:focus{ outline:none; border-color:var(--accent); color:var(--text); background:#0e1216; }
+  .val-suffix{ font-family:var(--font-mono); font-size:11px; color:var(--dim); }
+
+  input[type=range]{
+    -webkit-appearance:none; width:100%; height:2px; background:var(--line); outline:none; margin:6px 0 4px;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:13px; height:13px; border-radius:2px; background:var(--text);
+    cursor:pointer; border:2px solid var(--panel); box-shadow:0 0 0 1px var(--line);
+  }
+  input[type=range].plane-a::-webkit-slider-thumb{ background:var(--plane-a); box-shadow:0 0 0 1px var(--plane-a); }
+  input[type=range].plane-b::-webkit-slider-thumb{ background:var(--plane-b); box-shadow:0 0 0 1px var(--plane-b); }
+  input[type=range].stretch::-webkit-slider-thumb{ background:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+
+  select{
+    width:100%; background:#0e1216; color:var(--text); border:1px solid var(--line);
+    padding:8px 10px; font-family:var(--font-mono); font-size:12px; outline:none;
+  }
+
+  .btn{
+    width:100%; padding:10px 12px; background:transparent; border:1px solid var(--line);
+    color:var(--text); font-family:var(--font-display); font-size:12px; font-weight:500;
+    cursor:pointer; margin-bottom:8px; letter-spacing:0.01em; transition:border-color .15s, background .15s;
+  }
+  .btn:hover{ border-color:var(--dim); background:#171c22; }
+  .btn.primary{ border-color:var(--accent); color:var(--accent); }
+  .btn.primary:hover{ background:rgba(244,176,62,0.08); }
+  .btn.danger{ color:var(--danger); border-color:#3a2323; }
+  .btn.danger:hover{ border-color:var(--danger); background:rgba(255,107,107,0.06); }
+  .btn:disabled{ opacity:0.35; cursor:default; }
+  .btn:disabled:hover{ border-color:var(--line); background:transparent; }
+  input[type=file]{ display:none; }
+
+  .readout{
+    font-family:var(--font-mono); font-size:11px; color:var(--dim); line-height:1.9;
+    border:1px solid var(--line); padding:12px 14px; background:#0e1216;
+  }
+  .readout b{ color:var(--text); font-weight:500; }
+  .readout .a{ color:var(--plane-a); }
+  .readout .b{ color:var(--plane-b); }
+
+  .swatch{ display:inline-block; width:8px; height:8px; margin-right:6px; vertical-align:middle; }
+
+  #hint{
+    position:absolute; bottom:16px; left:16px; font-family:var(--font-mono); font-size:10.5px;
+    color:var(--dim); background:rgba(11,13,16,0.7); padding:8px 12px; border:1px solid var(--line);
+    pointer-events:none; line-height:1.7;
+  }
+  #loading{
+    position:absolute; top:16px; left:16px; font-family:var(--font-mono); font-size:11px;
+    color:var(--accent); background:rgba(11,13,16,0.7); padding:6px 10px; border:1px solid var(--line);
+    display:none;
+  }
+  #projToggle{
+    position:absolute; bottom:16px; right:16px; font-family:var(--font-mono); font-size:11px;
+    color:var(--text); background:rgba(11,13,16,0.7); padding:8px 12px; border:1px solid var(--line);
+    cursor:pointer; letter-spacing:0.02em;
+  }
+  #projToggle:hover{ border-color:var(--dim); }
+  #errorBanner{
+    position:absolute; top:16px; left:50%; transform:translateX(-50%); max-width:70%;
+    font-family:var(--font-mono); font-size:11.5px; color:var(--danger);
+    background:rgba(11,13,16,0.92); padding:10px 14px; border:1px solid var(--danger);
+    display:none; z-index:10; line-height:1.5;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="panel">
+    <h1>STRETCH</h1>
+    <p class="sub">Cut a mesh with two parallel planes. The band between them scales along the plane normal — everything outside just shifts to stay attached. Import STL or 3MF, export STL.</p>
+
+    <div class="section">
+      <div class="section-title">Model</div>
+      <button class="btn" id="btnUpload">Load STL / 3MF / OBJ</button>
+      <input type="file" id="fileInput" accept=".stl,.3mf,.obj">
+      <input type="text" id="exportName" value="stretched" spellcheck="false"
+        style="width:100%; box-sizing:border-box; background:#0e1216; color:var(--text); border:1px solid var(--line); padding:8px 10px; font-family:var(--font-mono); font-size:12px; margin-bottom:8px;">
+      <button class="btn" id="btnExport">Export stretched STL</button>
+      <button class="btn" id="btnUndo" disabled>Undo last commit</button>
+      <button class="btn danger" id="btnReset">Reset to original</button>
+    </div>
+
+    <div class="section" id="objectsSection" style="display:none;">
+      <div class="section-title">Objects</div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn" id="objSelectAll" style="flex:1; margin-bottom:0;">Select all</button>
+        <button class="btn" id="objSelectNone" style="flex:1; margin-bottom:0;">Select none</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Axis &amp; angle</div>
+      <select id="axisSelect">
+        <option value="0">X</option>
+        <option value="1" selected>Y</option>
+        <option value="2">Z</option>
+      </select>
+      <div class="row" style="margin-top:14px;"><label id="tiltALabel">Tilt toward X</label><span class="val-wrap"><input type="number" class="val-input" id="valTiltA" value="0" step="1" min="-85" max="85"><span class="val-suffix">°</span></span></div>
+      <input type="range" id="tiltA" min="-85" max="85" step="1" value="0">
+      <div class="row" style="margin-top:12px;"><label id="tiltBLabel">Tilt toward Z</label><span class="val-wrap"><input type="number" class="val-input" id="valTiltB" value="0" step="1" min="-85" max="85"><span class="val-suffix">°</span></span></div>
+      <input type="range" id="tiltB" min="-85" max="85" step="1" value="0">
+    </div>
+
+    <div class="section">
+      <div class="section-title">Cut planes</div>
+      <div class="row"><label><span class="swatch" style="background:var(--plane-a)"></span>Plane A</label><span class="val-wrap"><input type="number" class="val-input" id="valA" value="0.00" step="0.01"></span></div>
+      <input type="range" id="planeA" class="plane-a" min="0" max="1" step="0.001" value="0.33">
+      <div class="row" style="margin-top:12px;"><label><span class="swatch" style="background:var(--plane-b)"></span>Plane B</label><span class="val-wrap"><input type="number" class="val-input" id="valB" value="0.00" step="0.01"></span></div>
+      <input type="range" id="planeB" class="plane-b" min="0" max="1" step="0.001" value="0.66">
+    </div>
+
+    <div class="section">
+      <div class="section-title">Stretch factor</div>
+      <div class="row"><label>Axial scale (band length)</label><span class="val-wrap"><input type="number" class="val-input" id="valS" value="1.00" step="0.01" min="0.1" max="4"><span class="val-suffix">×</span></span></div>
+      <input type="range" id="stretch" class="stretch" min="0.1" max="4" step="0.01" value="1">
+      <div class="row" style="margin-top:12px;"><label>Radial scale (band cross-section)</label><span class="val-wrap"><input type="number" class="val-input" id="valRadial" value="1.00" step="0.01" min="0.1" max="4"><span class="val-suffix">×</span></span></div>
+      <input type="range" id="radial" class="stretch" min="0.1" max="4" step="0.01" value="1">
+    </div>
+
+    <div class="section">
+      <div class="section-title">Overall size</div>
+      <div class="row"><label>Scale selected object(s)</label><span class="val-wrap"><input type="number" class="val-input" id="valUniform" value="1.00" step="0.01" min="0.1" max="4"><span class="val-suffix">×</span></span></div>
+      <input type="range" id="uniform" class="stretch" min="0.1" max="4" step="0.01" value="1">
+    </div>
+
+    <div class="section">
+      <div class="section-title">Readout</div>
+      <div class="readout" id="readout"></div>
+    </div>
+  </div>
+  <div id="viewport">
+    <div id="loading">parsing&hellip;</div>
+    <button id="projToggle" title="Switch between perspective and orthographic view">Perspective</button>
+    <div id="hint">drag — orbit &nbsp;·&nbsp; right-drag — pan &nbsp;·&nbsp; +shift — 1 axis &nbsp;·&nbsp; scroll — zoom</div>
+    <div id="errorBanner"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+
+// ---------- renderer / scene ----------
+const viewport = document.getElementById('viewport');
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(viewport.clientWidth, viewport.clientHeight);
+renderer.setClearColor(0x0b0d10, 1);
+viewport.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, viewport.clientWidth/viewport.clientHeight, 0.01, 1000);
+
+// Everything that should visually grow/shrink together when the "Overall
+// size" slider moves — the mesh, the cutting planes, and the center-axis
+// lines — lives under this group, so scaling it once keeps all of them in
+// alignment automatically. The grid (a general spatial reference) and the
+// gizmo (a fixed-size UI overlay) deliberately stay outside it.
+const modelGroup = new THREE.Group();
+scene.add(modelGroup);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const dl1 = new THREE.DirectionalLight(0xffffff, 0.9); dl1.position.set(4,6,5); scene.add(dl1);
+const dl2 = new THREE.DirectionalLight(0xffffff, 0.35); dl2.position.set(-5,-2,-4); scene.add(dl2);
+
+// Built at a fixed base size, then scaled per-object in updateGridSize() —
+// same reasoning as the cutting planes below: real-world imports range from
+// a few mm to meters, so a fixed size looks wrong at either extreme.
+const GRID_BASE_SIZE = 20;
+const grid = new THREE.GridHelper(GRID_BASE_SIZE, 40, 0x262c33, 0x1a1e23);
+scene.add(grid);
+
+// The view-cube gizmo lives in the top-right corner of the canvas; this lets
+// both the orbit controls and the gizmo's own click handler agree on
+// whether a given mouse event landed on it.
+const GIZMO_SIZE = 84;   // px
+const GIZMO_MARGIN = 14; // px from the corner
+function isInGizmoRect(clientX, clientY){
+  const rect = renderer.domElement.getBoundingClientRect();
+  const x = clientX - rect.left, y = clientY - rect.top;
+  const gx0 = rect.width - GIZMO_MARGIN - GIZMO_SIZE;
+  const gy0 = GIZMO_MARGIN;
+  return x >= gx0 && x <= gx0 + GIZMO_SIZE && y >= gy0 && y <= gy0 + GIZMO_SIZE;
+}
+
+// ---------- minimal orbit controls ----------
+function OrbitControls(camera, dom){
+  this.camera = camera; this.dom = dom;
+  this.target = new THREE.Vector3(0,0,0);
+  this.radius = 8; this.theta = Math.PI/4; this.phi = Math.PI/2.6;
+  this.minRadius = 0.3; this.maxRadius = 200;
+  let dragging=false, panning=false, lastX=0, lastY=0;
+  let shiftAxis = null; // 'x' | 'y' | null — which screen-space axis of movement is locked in
+
+  const onDown = (e)=>{
+    if (isInGizmoRect(e.clientX, e.clientY)) return; // gizmo handles its own clicks
+    dragging = e.button===0; panning = e.button===2;
+    lastX=e.clientX; lastY=e.clientY;
+    shiftAxis = null;
+  };
+  const onMove = (e)=>{
+    if(!dragging && !panning) return;
+    let dx = e.clientX-lastX, dy = e.clientY-lastY;
+    lastX=e.clientX; lastY=e.clientY;
+    if(e.shiftKey){
+      if(shiftAxis === null){
+        // Lock to whichever direction this movement is mostly along, so a
+        // slightly-diagonal drag doesn't flicker between axes. Applies the
+        // same way whether this turns out to be a rotate or a pan.
+        shiftAxis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+      }
+      if(shiftAxis === 'x') dy = 0; else dx = 0;
+    } else {
+      shiftAxis = null; // re-evaluate next time Shift is pressed again
+    }
+    if(dragging){
+      this.theta -= dx*0.006;
+      this.phi -= dy*0.006;
+      this.phi = Math.max(0.05, Math.min(Math.PI-0.05, this.phi));
+    } else if(panning){
+      const panSpeed = this.radius*0.0016;
+      const forward = new THREE.Vector3().subVectors(this.target, this.camera.position).normalize();
+      const right = new THREE.Vector3().crossVectors(forward, this.camera.up).normalize();
+      const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+      this.target.addScaledVector(right, -dx*panSpeed);
+      this.target.addScaledVector(up, dy*panSpeed);
+    }
+    this.update();
+  };
+  const onUp = ()=>{ dragging=false; panning=false; shiftAxis=null; };
+  const onWheel = (e)=>{
+    e.preventDefault();
+    this.radius *= (1 + Math.sign(e.deltaY)*0.08);
+    this.radius = Math.max(this.minRadius, Math.min(this.maxRadius, this.radius));
+    this.update();
+  };
+  dom.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  dom.addEventListener('wheel', onWheel, {passive:false});
+  dom.addEventListener('contextmenu', e=>e.preventDefault());
+
+  this.update = function(){
+    const x = this.target.x + this.radius*Math.sin(this.phi)*Math.sin(this.theta);
+    const y = this.target.y + this.radius*Math.cos(this.phi);
+    const z = this.target.z + this.radius*Math.sin(this.phi)*Math.cos(this.theta);
+    this.camera.position.set(x,y,z);
+    this.camera.lookAt(this.target);
+  };
+  this.frame = function(radius, center){
+    this.target.copy(center);
+    this.radius = radius;
+    this.update();
+  };
+  this.update();
+}
+const controls = new OrbitControls(camera, renderer.domElement);
+
+// ---------- orthographic camera (kept in sync with the perspective one) ----------
+// Rather than modify OrbitControls itself, wrap its update() so every orbit,
+// pan, zoom, or programmatic frame/snap also repositions this camera and
+// resizes its frustum to match — so toggling projection mid-session doesn't
+// jump the view.
+const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
+let activeCamera = camera;
+
+function syncOrthoCamera(){
+  orthoCamera.position.copy(camera.position);
+  orthoCamera.up.copy(camera.up);
+  orthoCamera.lookAt(controls.target);
+  const aspect = viewport.clientWidth / viewport.clientHeight;
+  const fovRad = THREE.MathUtils.degToRad(camera.fov);
+  // Match the ortho frustum to what the perspective camera sees at the
+  // current orbit distance, so apparent object size stays consistent when
+  // switching projections.
+  const halfHeight = controls.radius * Math.tan(fovRad / 2);
+  const halfWidth = halfHeight * aspect;
+  orthoCamera.left = -halfWidth; orthoCamera.right = halfWidth;
+  orthoCamera.top = halfHeight; orthoCamera.bottom = -halfHeight;
+  orthoCamera.updateProjectionMatrix();
+}
+
+const _origControlsUpdate = controls.update.bind(controls);
+controls.update = function(){
+  _origControlsUpdate();
+  syncOrthoCamera();
+};
+controls.update(); // initial sync
+
+// ---------- view cube gizmo ----------
+// A small always-on cube in the corner mirroring the current orientation;
+// click a face to snap the camera to that standard view.
+const gizmoScene = new THREE.Scene();
+const gizmoCamera = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
+
+function makeGizmoFaceTexture(label){
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#161b21';
+  ctx.fillRect(0, 0, 128, 128);
+  ctx.strokeStyle = '#3a4048';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, 124, 124);
+  ctx.fillStyle = '#c7cfd6';
+  ctx.font = '600 20px "Space Grotesk", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Order matches THREE.BoxGeometry's default material groups: +X,-X,+Y,-Y,+Z,-Z
+const GIZMO_VIEWS = [
+  { label:'RIGHT',  theta: Math.PI/2,  phi: Math.PI/2 },
+  { label:'LEFT',   theta:-Math.PI/2,  phi: Math.PI/2 },
+  { label:'TOP',    theta: 0,          phi: 0.001 },
+  { label:'BOTTOM', theta: 0,          phi: Math.PI - 0.001 },
+  { label:'FRONT',  theta: 0,          phi: Math.PI/2 },
+  { label:'BACK',   theta: Math.PI,    phi: Math.PI/2 }
+];
+const gizmoMaterials = GIZMO_VIEWS.map(v => new THREE.MeshBasicMaterial({ map: makeGizmoFaceTexture(v.label) }));
+const gizmoCube = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.8, 1.8), gizmoMaterials);
+gizmoScene.add(gizmoCube);
+gizmoScene.add(new THREE.LineSegments(
+  new THREE.EdgesGeometry(gizmoCube.geometry),
+  new THREE.LineBasicMaterial({ color:0x50565e })
+));
+
+function updateGizmoCamera(){
+  const dir = new THREE.Vector3().subVectors(camera.position, controls.target);
+  if(dir.lengthSq() < 1e-9) dir.set(0,0,1);
+  dir.normalize();
+  gizmoCamera.position.copy(dir).multiplyScalar(4);
+  gizmoCamera.up.copy(camera.up);
+  gizmoCamera.lookAt(0,0,0);
+}
+
+function renderGizmo(){
+  updateGizmoCamera();
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  const gx = w - GIZMO_MARGIN - GIZMO_SIZE;
+  const gy = h - GIZMO_MARGIN - GIZMO_SIZE; // three.js viewport Y is bottom-up
+  renderer.setScissorTest(true);
+  renderer.setViewport(gx, gy, GIZMO_SIZE, GIZMO_SIZE);
+  renderer.setScissor(gx, gy, GIZMO_SIZE, GIZMO_SIZE);
+  renderer.render(gizmoScene, gizmoCamera); // autoClear scopes the clear to the scissor rect
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, w, h);
+}
+
+const gizmoRaycaster = new THREE.Raycaster();
+
+function gizmoSnapFromEvent(clientX, clientY){
+  const rect = renderer.domElement.getBoundingClientRect();
+  const gx = rect.width - GIZMO_MARGIN - GIZMO_SIZE;
+  const gy = GIZMO_MARGIN; // CSS space, top-down, matches isInGizmoRect
+  const localX = (clientX - rect.left - gx) / GIZMO_SIZE;
+  const localY = (clientY - rect.top - gy) / GIZMO_SIZE;
+  const ndc = new THREE.Vector2(localX*2 - 1, -(localY*2 - 1));
+  gizmoRaycaster.setFromCamera(ndc, gizmoCamera);
+  const hit = gizmoRaycaster.intersectObject(gizmoCube)[0];
+  if(!hit || !hit.face) return;
+  const view = GIZMO_VIEWS[hit.face.materialIndex];
+  if(!view) return;
+  controls.theta = view.theta;
+  controls.phi = view.phi;
+  controls.update();
+}
+
+// Dragging on the cube rotates the main view exactly like dragging
+// elsewhere in the viewport; a drag short enough to count as a plain click
+// instead snaps to whichever face was clicked.
+const GIZMO_CLICK_THRESHOLD = 4; // px of total movement, below which it's a "click" not a drag
+let gizmoDragging = false, gizmoMoved = 0, lastGizmoX = 0, lastGizmoY = 0;
+let gizmoShiftAxis = null;
+
+renderer.domElement.addEventListener('mousedown', (e)=>{
+  if(e.button !== 0) return;
+  if(!isInGizmoRect(e.clientX, e.clientY)) return;
+  gizmoDragging = true;
+  gizmoMoved = 0;
+  gizmoShiftAxis = null;
+  lastGizmoX = e.clientX; lastGizmoY = e.clientY;
+});
+window.addEventListener('mousemove', (e)=>{
+  if(!gizmoDragging) return;
+  const dx = e.clientX - lastGizmoX, dy = e.clientY - lastGizmoY;
+  lastGizmoX = e.clientX; lastGizmoY = e.clientY;
+  gizmoMoved += Math.abs(dx) + Math.abs(dy);
+  if(e.shiftKey){
+    if(gizmoShiftAxis === null) gizmoShiftAxis = Math.abs(dx) >= Math.abs(dy) ? 'theta' : 'phi';
+    if(gizmoShiftAxis === 'theta') controls.theta -= dx*0.006;
+    else controls.phi -= dy*0.006;
+  } else {
+    gizmoShiftAxis = null;
+    controls.theta -= dx*0.006;
+    controls.phi -= dy*0.006;
+  }
+  controls.phi = Math.max(0.05, Math.min(Math.PI-0.05, controls.phi));
+  controls.update();
+});
+window.addEventListener('mouseup', (e)=>{
+  if(!gizmoDragging) return;
+  gizmoDragging = false;
+  if(gizmoMoved < GIZMO_CLICK_THRESHOLD){
+    gizmoSnapFromEvent(e.clientX, e.clientY);
+  }
+});
+
+// ---------- material / mesh ----------
+const material = new THREE.MeshStandardMaterial({
+  color: 0x9fb4c7, metalness:0.15, roughness:0.55, side: THREE.DoubleSide, flatShading:false, vertexColors:true
+});
+let mesh = null;
+let basePositions = null;      // Float32Array, never mutated by stretch
+let axisIndex = 1;              // 0=x,1=y,2=z
+let currentNormal = new THREE.Vector3(0,1,0); // unit normal shared by both planes
+let boundsMin = 0, boundsMax = 1;
+
+// Which source object each vertex belongs to (for files with multiple
+// build items, like multi-part 3MF exports), and which of those objects
+// are currently included in the stretch. Vertices belonging to a
+// deselected object are left completely untouched by applyStretch.
+let objectRanges = [];     // [{name, start, count}, ...] in vertex-index units
+let objectSelected = [];   // parallel boolean array, one per entry in objectRanges
+
+// All objects share one plain color (so the model looks the same as before
+// this feature existed); only the dim-when-deselected effect distinguishes
+// them visually now.
+function getObjectColor(idx, total){
+  return new THREE.Color(1,1,1);
+}
+
+// Deselected objects get dimmed in addition to being excluded from the
+// stretch, so selection state is visible in the viewport itself, not just
+// the checkbox list.
+function updateObjectColors(){
+  const total = basePositions.length / 3;
+  const colors = new Float32Array(total*3);
+  objectRanges.forEach((r, idx) => {
+    const c = getObjectColor(idx, objectRanges.length);
+    const dim = objectSelected[idx] ? 1 : 0.25;
+    for(let v = r.start; v < r.start + r.count; v++){
+      colors[v*3] = c.r*dim; colors[v*3+1] = c.g*dim; colors[v*3+2] = c.b*dim;
+    }
+  });
+  const geo = mesh.geometry;
+  if(geo.attributes.color && geo.attributes.color.array.length === colors.length){
+    geo.attributes.color.array.set(colors);
+    geo.attributes.color.needsUpdate = true;
+  } else {
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  }
+}
+
+// ---------- click-to-select an object in the 3D view ----------
+// A plain click (not a drag) on the mesh toggles whichever object was
+// clicked, the same as its checkbox — useful since the text labels alone
+// don't tell you which part is which. Uses the same click-vs-drag
+// distance threshold as the gizmo, tracked independently of it.
+const pickRaycaster = new THREE.Raycaster();
+const PICK_CLICK_THRESHOLD = 4; // px
+let pickCandidate = false, pickMoved = 0, pickStartX = 0, pickStartY = 0;
+
+renderer.domElement.addEventListener('mousedown', (e)=>{
+  if(e.button !== 0) return;
+  if(isInGizmoRect(e.clientX, e.clientY)) return; // gizmo owns clicks in its corner
+  pickCandidate = true;
+  pickMoved = 0;
+  pickStartX = e.clientX; pickStartY = e.clientY;
+});
+window.addEventListener('mousemove', (e)=>{
+  if(!pickCandidate) return;
+  pickMoved = Math.max(pickMoved, Math.abs(e.clientX-pickStartX) + Math.abs(e.clientY-pickStartY));
+});
+window.addEventListener('mouseup', (e)=>{
+  if(!pickCandidate) return;
+  pickCandidate = false;
+  if(pickMoved < PICK_CLICK_THRESHOLD) handleObjectPick(e.clientX, e.clientY);
+});
+
+function handleObjectPick(clientX, clientY){
+  if(objectRanges.length <= 1 || !mesh) return; // nothing to disambiguate
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndc = new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -(((clientY - rect.top) / rect.height) * 2 - 1)
+  );
+  pickRaycaster.setFromCamera(ndc, activeCamera);
+  const hit = pickRaycaster.intersectObject(mesh)[0];
+  if(!hit || hit.faceIndex === undefined) return;
+  const geo = mesh.geometry;
+  const vIndex = geo.index ? geo.index.array[hit.faceIndex*3] : hit.faceIndex*3;
+  const objIdx = objectRanges.findIndex(r => vIndex >= r.start && vIndex < r.start + r.count);
+  if(objIdx === -1) return;
+  // Bake in whatever deformation is currently showing (for the OLD
+  // selection) before changing what's selected — otherwise the current
+  // slider values would silently start applying to whatever gets selected
+  // next, even though the user never touched a slider for that object.
+  bakeCurrentShapeAndCorrectPlanes(null);
+  objectSelected[objIdx] = !objectSelected[objIdx];
+  updateObjectColors();
+  applyStretch();
+}
+
+document.getElementById('objSelectAll').addEventListener('click', ()=>{
+  bakeCurrentShapeAndCorrectPlanes(null);
+  objectSelected = objectSelected.map(() => true);
+  updateObjectColors();
+  applyStretch();
+});
+document.getElementById('objSelectNone').addEventListener('click', ()=>{
+  bakeCurrentShapeAndCorrectPlanes(null);
+  objectSelected = objectSelected.map(() => false);
+  updateObjectColors();
+  applyStretch();
+});
+
+function buildDefaultGeometry(){
+  const geo = new THREE.CylinderGeometry(0.8, 0.8, 4, 40, 60, false);
+  return geo;
+}
+
+// Finds the index of the first non-finite (NaN/Infinity) value in a
+// typed array, or -1 if it's clean. Used at a few checkpoints below to
+// turn a mysterious late crash deep inside Three.js into a specific,
+// actionable message pointing at which stage actually went wrong.
+function findFirstNonFinite(arr){
+  for(let i=0;i<arr.length;i++){ if(!Number.isFinite(arr[i])) return i; }
+  return -1;
+}
+function reportNumericError(stage, detail){
+  console.error('[Stretch] numeric error at:', stage, detail || '');
+  const banner = document.getElementById('errorBanner');
+  if(banner){
+    banner.textContent = 'Numeric error while ' + stage + ' — operation skipped to avoid corrupting the model. See browser console for details.';
+    banner.style.display = 'block';
+    clearTimeout(banner._hideTimer);
+    banner._hideTimer = setTimeout(() => { banner.style.display = 'none'; }, 6000);
+  }
+}
+
+function setMeshGeometry(geometry, recenter){
+  if(mesh){ modelGroup.remove(mesh); mesh.geometry.dispose(); }
+  undoStack = [];
+  updateUndoButtonState();
+  uniformScaleSlider.value = 1;
+  lastSubdivisionKey = null;
+  // Everything downstream (subdivision, per-object ranges, the transform
+  // loop) assumes a flat triangle-soup layout — every 9 consecutive floats
+  // is one independent triangle. That's already true for every imported
+  // STL/3MF/OBJ file, but the built-in demo shape is indexed (vertices
+  // shared via a separate index buffer), which silently breaks that
+  // assumption and was feeding garbage into the clipping algorithm.
+  if(geometry.index){
+    geometry = geometry.toNonIndexed();
+  }
+  geometry.computeBoundingBox();
+  if(recenter){
+    const c = new THREE.Vector3();
+    geometry.boundingBox.getCenter(c);
+    geometry.translate(-c.x, -c.y, -c.z);
+    geometry.computeBoundingBox();
+  }
+  mesh = new THREE.Mesh(geometry, material);
+  modelGroup.add(mesh);
+  basePositions = Float32Array.from(geometry.attributes.position.array);
+  const badIdx = findFirstNonFinite(basePositions);
+  if(badIdx !== -1){
+    reportNumericError('loading this file', `invalid coordinate at vertex ${Math.floor(badIdx/3)} (component ${badIdx%3}) — the source file likely has a malformed or missing vertex.`);
+  }
+  objectRanges = (geometry.userData && geometry.userData.objectRanges && geometry.userData.objectRanges.length)
+    ? geometry.userData.objectRanges
+    : [{ name: 'Object 1', start: 0, count: basePositions.length/3 }];
+  objectSelected = objectRanges.map(() => true); // none specified -> all selected, per spec
+  updateObjectColors();
+  rebuildCenterAxisLines();
+  document.getElementById('objectsSection').style.display = objectRanges.length > 1 ? 'block' : 'none';
+  tiltASlider.value = 0; tiltBSlider.value = 0;
+  updateTiltLabels();
+  updateNormal();
+  computeAxisBounds();
+  resetPlanesToDefault();
+  frameCameraToObject();
+  updatePlaneSize();
+  updateGridSize();
+  updatePlaneMeshes();
+  applyStretch();
+}
+
+function computeAxisBounds(){
+  const n = currentNormal;
+  let min = Infinity, max = -Infinity;
+  for(let i=0; i<basePositions.length; i+=3){
+    const t = basePositions[i]*n.x + basePositions[i+1]*n.y + basePositions[i+2]*n.z;
+    if(t<min) min=t; if(t>max) max=t;
+  }
+  boundsMin = min; boundsMax = max;
+}
+
+function frameCameraToObject(){
+  mesh.geometry.computeBoundingSphere();
+  const r = mesh.geometry.boundingSphere.radius;
+  // Real-world imports range from a few mm to meters (this file's ~450mm
+  // bounding radius alone exceeded the old fixed 200-unit zoom cap) — so
+  // the zoom range has to scale with the object, not assume a fixed size.
+  controls.minRadius = Math.min(r * 0.02, 0.3);
+  controls.maxRadius = Math.max(r * 20, 200);
+
+  // The clipping planes have to bracket that whole zoom range too, or the
+  // object gets frustum-culled (silently disappears) once the camera is
+  // farther from it than the old fixed far plane allowed.
+  const near = Math.max(r * 0.001, 0.01);
+  const far = Math.max(r * 40, 1000);
+  camera.near = near; camera.far = far; camera.updateProjectionMatrix();
+  orthoCamera.near = near; orthoCamera.far = far;
+
+  controls.frame(Math.max(r*3.2, 2), new THREE.Vector3(0,0,0));
+}
+
+// ---------- plane visuals ----------
+// Built as a 1x1 unit square and scaled per-object (see updatePlaneSize),
+// since real-world imports range from a few mm to meters — a fixed size
+// would look tiny next to a large model or huge next to a small one.
+//
+// depthTest is off, not just depthWrite: these are reference/cutting-plane
+// overlays, not real geometry — they should always show through the object
+// like an X-ray, not get realistically occluded by whatever's in front of
+// them. renderOrder is explicit for the same reason: without it, automatic
+// distance-based transparency sorting can tie (or lose outright) against
+// the opaque mesh when viewed face-on in orthographic — where depth
+// doesn't vary across a flat surface the way it does in perspective —
+// making the plane vanish from exactly that viewing angle.
+const planeAMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(1, 1),
+  new THREE.MeshBasicMaterial({ color:0x5eebd8, transparent:true, opacity:0.14, side:THREE.DoubleSide, depthWrite:false, depthTest:false })
+);
+const planeBMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(1, 1),
+  new THREE.MeshBasicMaterial({ color:0xff6ec7, transparent:true, opacity:0.14, side:THREE.DoubleSide, depthWrite:false, depthTest:false })
+);
+const planeAWire = new THREE.LineSegments(new THREE.EdgesGeometry(planeAMesh.geometry), new THREE.LineBasicMaterial({color:0x5eebd8, transparent:true, opacity:0.6, depthWrite:false, depthTest:false}));
+const planeBWire = new THREE.LineSegments(new THREE.EdgesGeometry(planeBMesh.geometry), new THREE.LineBasicMaterial({color:0xff6ec7, transparent:true, opacity:0.6, depthWrite:false, depthTest:false}));
+planeAMesh.add(planeAWire); planeBMesh.add(planeBWire);
+planeAMesh.renderOrder = 1; planeBMesh.renderOrder = 2; // draw after the (renderOrder-0) mesh, always
+planeAWire.renderOrder = 1; planeBWire.renderOrder = 2;
+// A large, non-uniformly scaled, rotated plane can get incorrectly
+// frustum-culled at certain camera angles (the culling test uses a
+// bounding sphere computed from the plane's local/unscaled geometry,
+// which doesn't always transform cleanly through our scale+rotation).
+// These are cheap to always render, so just skip the culling test.
+planeAMesh.frustumCulled = false; planeBMesh.frustumCulled = false;
+planeAWire.frustumCulled = false; planeBWire.frustumCulled = false;
+modelGroup.add(planeAMesh); modelGroup.add(planeBMesh);
+
+// ---------- per-object central axis lines ----------
+// One reusable line per object, showing exactly where that object's own
+// radial-scale pivot axis sits (see applyStretch) — makes it visible at a
+// glance whether the current band actually reaches a given object, since a
+// multi-part file spread across a wide area can easily have some objects
+// sitting entirely outside the globally-shared plane positions.
+let centerAxisLines = [];
+function rebuildCenterAxisLines(){
+  centerAxisLines.forEach(l => { modelGroup.remove(l); l.geometry.dispose(); l.material.dispose(); });
+  centerAxisLines = objectRanges.map(() => {
+    const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const mat = new THREE.LineBasicMaterial({ color:0xf4b03e, transparent:true, opacity:0.85, depthWrite:false, depthTest:false });
+    const line = new THREE.Line(geo, mat);
+    line.renderOrder = 3;
+    line.visible = false;
+    modelGroup.add(line);
+    return line;
+  });
+}
+
+// Scale (not regenerate) the plane meshes so they comfortably span the
+// loaded object regardless of its real-world units. Radius is an upper
+// bound on distance from the (recentered) origin to any vertex, so a
+// half-width of 1.5x radius always clears the object from any angle.
+function updatePlaneSize(){
+  mesh.geometry.computeBoundingSphere();
+  const r = mesh.geometry.boundingSphere.radius;
+  const size = Math.max(r * 3, 2);
+  planeAMesh.scale.set(size, size, 1);
+  planeBMesh.scale.set(size, size, 1);
+}
+
+function updateGridSize(){
+  mesh.geometry.computeBoundingSphere();
+  const r = mesh.geometry.boundingSphere.radius;
+  const desired = Math.max(r * 4, GRID_BASE_SIZE);
+  const s = desired / GRID_BASE_SIZE;
+  grid.scale.set(s, 1, s); // grid lies flat in XZ, no need to scale Y
+}
+
+function orientPlaneToNormal(planeMesh, n){
+  const defaultNormal = orientPlaneToNormal._default || (orientPlaneToNormal._default = new THREE.Vector3(0,0,1));
+  planeMesh.quaternion.setFromUnitVectors(defaultNormal, n);
+}
+
+function updateNormal(){
+  const axisVecs = [
+    new THREE.Vector3(1,0,0),
+    new THREE.Vector3(0,1,0),
+    new THREE.Vector3(0,0,1)
+  ];
+  const others = [0,1,2].filter(i => i !== axisIndex);
+  const base = axisVecs[axisIndex].clone();
+  const axisA = axisVecs[others[0]]; // "tilt toward" this axis (tiltA)
+  const axisB = axisVecs[others[1]]; // "tilt toward" this axis (tiltB)
+  const tiltA = THREE.MathUtils.degToRad(parseFloat(tiltASlider.value));
+  const tiltB = THREE.MathUtils.degToRad(parseFloat(tiltBSlider.value));
+  base.applyAxisAngle(axisB, tiltA); // rotating around axisB sweeps toward axisA
+  base.applyAxisAngle(axisA, tiltB); // rotating around axisA sweeps toward axisB
+  base.normalize();
+  currentNormal = base;
+}
+
+const AXIS_NAMES = ['X','Y','Z'];
+function updateTiltLabels(){
+  const others = [0,1,2].filter(i => i !== axisIndex);
+  document.getElementById('tiltALabel').textContent = 'Tilt toward ' + AXIS_NAMES[others[0]];
+  document.getElementById('tiltBLabel').textContent = 'Tilt toward ' + AXIS_NAMES[others[1]];
+}
+
+function clamp(v, lo, hi){ return Math.min(hi, Math.max(lo, v)); }
+
+function setPlanePosition(planeMesh, value){
+  planeMesh.position.copy(currentNormal).multiplyScalar(value);
+}
+
+function updatePlaneMeshes(){
+  orientPlaneToNormal(planeAMesh, currentNormal);
+  orientPlaneToNormal(planeBMesh, currentNormal);
+  const d1 = Math.min(getPlaneAValue(), getPlaneBValue());
+  const d2 = Math.max(getPlaneAValue(), getPlaneBValue());
+  const s = parseFloat(stretchSlider.value);
+  // The lower plane never moves (geometry below it is untouched).
+  // The upper plane sits at the far edge of the band, which does move
+  // as the band scales, so its visual position has to follow that.
+  const d2Stretched = d1 + (d2 - d1) * s;
+  setPlanePosition(planeAMesh, d1);
+  setPlanePosition(planeBMesh, d2Stretched);
+}
+
+// ---------- UI elements ----------
+const axisSelect = document.getElementById('axisSelect');
+const tiltASlider = document.getElementById('tiltA');
+const tiltBSlider = document.getElementById('tiltB');
+const valTiltA = document.getElementById('valTiltA');
+const valTiltB = document.getElementById('valTiltB');
+const planeASlider = document.getElementById('planeA');
+const planeBSlider = document.getElementById('planeB');
+const stretchSlider = document.getElementById('stretch');
+const radialSlider = document.getElementById('radial');
+const uniformScaleSlider = document.getElementById('uniform');
+const valUniform = document.getElementById('valUniform');
+const valA = document.getElementById('valA');
+const valB = document.getElementById('valB');
+const valS = document.getElementById('valS');
+const valRadial = document.getElementById('valRadial');
+const readout = document.getElementById('readout');
+
+// Undo history: a stack of full-state snapshots pushed right before each
+// "commit" (baking a stretch into the base geometry). Undo pops the most
+// recent one and restores everything — geometry, plane positions, sliders,
+// selection — to exactly how it was just before that commit happened.
+const UNDO_LIMIT = 20;
+let undoStack = [];
+const btnUndo = document.getElementById('btnUndo');
+function updateUndoButtonState(){
+  btnUndo.disabled = undoStack.length === 0;
+}
+function pushUndoSnapshot(exceptSlider){
+  // If this snapshot is being taken because a plane slider is mid-drag,
+  // that slider's .value already reflects the NEW position — the browser
+  // updates it before our 'input' handler runs. Recover its true pre-drag
+  // value from lastD1/lastD2 (the last successfully rendered band) so
+  // Undo can fully rewind the drag, not just the shape/stretch factor.
+  let planeA = parseFloat(planeASlider.value);
+  let planeB = parseFloat(planeBSlider.value);
+  if(exceptSlider === planeASlider){
+    const bMatchesD1 = Math.abs(planeB - lastD1) <= Math.abs(planeB - lastD2);
+    planeA = bMatchesD1 ? lastD2 : lastD1;
+  } else if(exceptSlider === planeBSlider){
+    const aMatchesD1 = Math.abs(planeA - lastD1) <= Math.abs(planeA - lastD2);
+    planeB = aMatchesD1 ? lastD2 : lastD1;
+  }
+  undoStack.push({
+    basePositions: basePositions.slice(),
+    objectRanges: objectRanges.map(r => ({ name: r.name, start: r.start, count: r.count })),
+    axisIndex, boundsMin, boundsMax,
+    normal: { x: currentNormal.x, y: currentNormal.y, z: currentNormal.z },
+    tiltA: tiltASlider.value, tiltB: tiltBSlider.value,
+    planeA, planeB,
+    stretch: stretchSlider.value, radial: radialSlider.value, uniform: uniformScaleSlider.value,
+    objectSelected: objectSelected.slice()
+  });
+  if(undoStack.length > UNDO_LIMIT) undoStack.shift();
+  updateUndoButtonState();
+}
+function restoreSnapshot(snap){
+  basePositions = snap.basePositions.slice();
+  objectRanges = snap.objectRanges.map(r => ({ name: r.name, start: r.start, count: r.count }));
+  // The restored basePositions may be a different length than whatever's
+  // currently in the live geometry (subdivision can have changed vertex
+  // counts since this snapshot was taken) — rebuild the attribute to match
+  // rather than assuming it's still the right size.
+  mesh.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(basePositions.length), 3));
+  lastSubdivisionKey = null; // force a fresh subdivision check against this restored state
+  axisIndex = snap.axisIndex;
+  boundsMin = snap.boundsMin; boundsMax = snap.boundsMax;
+  currentNormal = new THREE.Vector3(snap.normal.x, snap.normal.y, snap.normal.z);
+  axisSelect.value = String(axisIndex);
+  tiltASlider.value = snap.tiltA; tiltBSlider.value = snap.tiltB;
+  updateTiltLabels();
+  setSliderRangeToBounds(planeASlider);
+  setSliderRangeToBounds(planeBSlider);
+  planeASlider.value = snap.planeA; planeBSlider.value = snap.planeB;
+  stretchSlider.value = snap.stretch; radialSlider.value = snap.radial; uniformScaleSlider.value = snap.uniform;
+  objectSelected = snap.objectSelected.slice();
+  document.getElementById('objectsSection').style.display = objectRanges.length > 1 ? 'block' : 'none';
+  rebuildCenterAxisLines();
+  updateObjectColors();
+  refreshLabels();
+  applyStretch();
+}
+btnUndo.addEventListener('click', ()=>{
+  if(undoStack.length === 0) return;
+  restoreSnapshot(undoStack.pop());
+  updateUndoButtonState();
+});
+
+function getPlaneAValue(){ return parseFloat(planeASlider.value); }
+function getPlaneBValue(){ return parseFloat(planeBSlider.value); }
+
+// Track the band boundaries actually used for the most recent render, so that
+// if the user repositions a plane mid-stretch we know exactly where things
+// currently sit (rather than re-deriving it from sliders whose values may
+// already have changed underneath us).
+let lastD1 = 0, lastD2 = 0;
+
+function setSliderRangeToBounds(slider){
+  slider.min = boundsMin;
+  slider.max = boundsMax;
+  slider.step = (boundsMax - boundsMin) / 1000 || 0.001;
+}
+
+function resetPlanesToDefault(){
+  setSliderRangeToBounds(planeASlider);
+  setSliderRangeToBounds(planeBSlider);
+  const range = boundsMax - boundsMin;
+  planeASlider.value = boundsMin + range * 0.33;
+  planeBSlider.value = boundsMin + range * 0.66;
+  stretchSlider.value = 1;
+  radialSlider.value = 1;
+  uniformScaleSlider.value = 1;
+}
+
+function isDeformed(){
+  return Math.abs(parseFloat(stretchSlider.value) - 1) > 1e-9 ||
+         Math.abs(parseFloat(radialSlider.value) - 1) > 1e-9 ||
+         Math.abs(parseFloat(uniformScaleSlider.value) - 1) > 1e-9;
+}
+
+// If a stretch is currently applied, bake the shape as it currently appears
+// into the working base geometry and correct the plane sliders to their true
+// current positions (since one of them may only look correct visually,
+// while its slider still holds the pre-stretch value). Returns whether
+// anything needed baking. `exceptSlider`, if given, is left untouched (used
+// when the user is actively dragging that exact slider).
+function bakeCurrentShapeAndCorrectPlanes(exceptSlider){
+  if (!isDeformed()) return false;
+  const s = parseFloat(stretchSlider.value);
+
+  pushUndoSnapshot(exceptSlider); // capture everything as it was right before this commit
+
+  const d2Stretched = lastD1 + (lastD2 - lastD1) * s;
+  basePositions = Float32Array.from(mesh.geometry.attributes.position.array);
+
+  [planeASlider, planeBSlider].forEach(sl=>{
+    if (sl === exceptSlider) return;
+    const v = parseFloat(sl.value);
+    sl.value = (Math.abs(v - lastD1) < Math.abs(v - lastD2)) ? lastD1 : d2Stretched;
+  });
+
+  stretchSlider.value = 1;
+  radialSlider.value = 1;
+  uniformScaleSlider.value = 1;
+  lastSubdivisionKey = null;
+  return true;
+}
+
+// Used when a plane slider itself is being dragged — bakes the shape in
+// (shape retained, scale resets to 1x) then widens the slider ranges.
+function commitIfStretched(triggeringSlider){
+  const baked = bakeCurrentShapeAndCorrectPlanes(triggeringSlider);
+  if (!baked) return;
+  computeAxisBounds();
+  setSliderRangeToBounds(planeASlider);
+  setSliderRangeToBounds(planeBSlider);
+}
+
+// ---------- plane-clipping mesh subdivision ----------
+// Deformation only ever moves existing vertices — it never inserted new
+// ones. For a low-poly mesh where a single huge triangle spans an entire
+// cutting band (a plain cylindrical wall with no intermediate edge loops,
+// say), that meant the band could have zero vertices in it even while
+// sitting squarely inside the object's solid volume, so scaling did
+// nothing at all. This clips triangles at the plane boundaries (and a few
+// positions inside the band, so the radial taper has something to curve
+// across) and re-triangulates, guaranteeing real geometry to act on no
+// matter how sparse the source mesh is.
+function clipTriangleToHalfspace(tri, nx, ny, nz, offset, keepAbove){
+  const dist = [0,0,0];
+  for(let i=0;i<3;i++) dist[i] = tri[i][0]*nx + tri[i][1]*ny + tri[i][2]*nz - offset;
+  const keep = [dist[0]>=0, dist[1]>=0, dist[2]>=0];
+  if(!keepAbove) for(let i=0;i<3;i++) keep[i] = dist[i] <= 0;
+  const out = [];
+  for(let i=0;i<3;i++){
+    const cur = tri[i], next = tri[(i+1)%3];
+    const curKeep = keep[i], nextKeep = keep[(i+1)%3];
+    if(curKeep) out.push(cur);
+    if(curKeep !== nextKeep){
+      const d0 = dist[i], d1v = dist[(i+1)%3];
+      const t = d0/(d0-d1v);
+      out.push([cur[0]+(next[0]-cur[0])*t, cur[1]+(next[1]-cur[1])*t, cur[2]+(next[2]-cur[2])*t]);
+    }
+  }
+  return out;
+}
+function triangulateFan(poly){
+  const tris = [];
+  for(let i=1;i<poly.length-1;i++) tris.push([poly[0], poly[i], poly[i+1]]);
+  return tris;
+}
+function clipTriangleSoupAtPlane(triangles, nx, ny, nz, offset){
+  const out = [];
+  for(const tri of triangles){
+    const below = clipTriangleToHalfspace(tri, nx, ny, nz, offset, false);
+    const above = clipTriangleToHalfspace(tri, nx, ny, nz, offset, true);
+    if(below.length >= 3) out.push(...triangulateFan(below));
+    if(above.length >= 3) out.push(...triangulateFan(above));
+  }
+  return out;
+}
+
+// Only the two taper zones benefit from internal cuts — the plateau in
+// between is a flat constant multiplier, so any vertex there (however
+// sparse) already gets the right answer without needing extra points.
+// Kept deliberately economical: each cut can multiply a crossed triangle's
+// count, and this runs on real (sometimes very large) meshes.
+function computeBandCutPositions(d1, d2){
+  const span = d2 - d1;
+  const edgeWidth = Math.max(span * 0.2, 1e-6);
+  const cuts = [d1, d2];
+  const taperSteps = 3;
+  for(let k=1;k<taperSteps;k++){
+    cuts.push(d1 + edgeWidth*k/taperSteps);
+    cuts.push(d2 - edgeWidth*k/taperSteps);
+  }
+  return cuts;
+}
+
+let lastSubdivisionKey = null;
+// Rebuilds basePositions/objectRanges (and the live geometry's attributes
+// to match) so that every SELECTED object has real vertices at the band
+// boundaries and throughout the taper zones. Cached by a key covering the
+// band position, normal, and which objects are selected, so it's a no-op
+// on every slider tick except the first one after something actually
+// changes — this is real re-triangulation work, not something to redo 60
+// times a second while dragging.
+function ensureBandSubdivision(d1, d2){
+  const n = currentNormal;
+  if(!Number.isFinite(d1) || !Number.isFinite(d2) || !Number.isFinite(n.x) || !Number.isFinite(n.y) || !Number.isFinite(n.z)){
+    reportNumericError('positioning the cut planes', `d1=${d1}, d2=${d2}, normal=(${n.x},${n.y},${n.z})`);
+    return;
+  }
+  const key = [d1.toFixed(6), d2.toFixed(6), n.x.toFixed(5), n.y.toFixed(5), n.z.toFixed(5), objectSelected.join('')].join('|');
+  if(key === lastSubdivisionKey) return;
+  lastSubdivisionKey = key;
+
+  const cuts = computeBandCutPositions(d1, d2);
+  const newObjectRanges = [];
+  const newPositionsChunks = [];
+  let cursor = 0;
+
+  // Each commit (plane move, tilt, axis change) re-subdivides from whatever
+  // the mesh currently is — including any subdivision from a PRIOR commit.
+  // Without a ceiling, repeated commits compound multiplicatively: cut once
+  // and every crossed triangle roughly triples, cut again and each of
+  // those triples again, and so on, until the browser runs out of memory
+  // after only a handful of plane drags. Once an object already has this
+  // many triangles it's already far finer than needed for a smooth taper,
+  // so further passes just leave it as-is instead of subdividing again.
+  const MAX_TRIANGLES_PER_OBJECT = 150000;
+
+  objectRanges.forEach((r, objIdx) => {
+    const slice = basePositions.slice(r.start*3, (r.start+r.count)*3);
+    const alreadyFine = (slice.length/9) > MAX_TRIANGLES_PER_OBJECT;
+    if(!objectSelected[objIdx] || alreadyFine){
+      newPositionsChunks.push(slice);
+      newObjectRanges.push({ name: r.name, start: cursor, count: r.count });
+      cursor += r.count;
+      return;
+    }
+    const triangles = [];
+    for(let i=0;i<slice.length;i+=9){
+      triangles.push([
+        [slice[i],slice[i+1],slice[i+2]],
+        [slice[i+3],slice[i+4],slice[i+5]],
+        [slice[i+6],slice[i+7],slice[i+8]]
+      ]);
+    }
+    let current = triangles;
+    for(const offset of cuts) current = clipTriangleSoupAtPlane(current, n.x, n.y, n.z, offset);
+    const flat = new Float32Array(current.length*9);
+    for(let i=0;i<current.length;i++){
+      for(let v=0;v<3;v++){
+        flat[i*9+v*3]=current[i][v][0]; flat[i*9+v*3+1]=current[i][v][1]; flat[i*9+v*3+2]=current[i][v][2];
+      }
+    }
+    newPositionsChunks.push(flat);
+    const newCount = current.length*3;
+    newObjectRanges.push({ name: r.name, start: cursor, count: newCount });
+    cursor += newCount;
+  });
+
+  const merged = new Float32Array(cursor*3);
+  let off = 0;
+  for(const chunk of newPositionsChunks){ merged.set(chunk, off); off += chunk.length; }
+
+  const badIdx = findFirstNonFinite(merged);
+  if(badIdx !== -1){
+    reportNumericError('subdividing the mesh for this cut', `invalid coordinate at output index ${badIdx} (band ${d1.toFixed(4)} to ${d2.toFixed(4)}, normal (${n.x.toFixed(3)},${n.y.toFixed(3)},${n.z.toFixed(3)}))`);
+    lastSubdivisionKey = null; // don't let a bad result get cached as if it were fine
+    return; // leave basePositions/objectRanges/geometry exactly as they were
+  }
+
+  basePositions = merged;
+  objectRanges = newObjectRanges;
+  mesh.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(merged.length), 3));
+  // normal/uv are sized for the OLD vertex count and computeVertexNormals()
+  // only resets an existing normal attribute in place rather than resizing
+  // it — leaving position and normal/uv attribute counts mismatched, which
+  // WebGL fails on silently (no JS error, the mesh just doesn't draw).
+  // Deleting them here makes computeVertexNormals() (called next, in
+  // applyStretch) recreate normal fresh at the correct size; uv isn't used
+  // by this material at all, so it's simplest to just drop it.
+  mesh.geometry.deleteAttribute('normal');
+  mesh.geometry.deleteAttribute('uv');
+  updateObjectColors();
+  rebuildCenterAxisLines();
+}
+
+// Three.js's computeVertexNormals() only computes flat, per-triangle
+// normals on non-indexed geometry — there's no shared-vertex concept left
+// to average across, so every deformed shape (and even the undeformed
+// default cylinder, once converted to non-indexed) ends up faceted instead
+// of smoothly shaded. This restores smooth shading by averaging normals
+// across triangles that share a vertex position, but only when their face
+// angle is under the threshold — so a cylinder's curved wall blends
+// smoothly while a genuine hard edge (like its cap-to-wall seam) stays
+// crisp, matching how the original indexed geometry looked.
+function computeSmartNormals(geometry, angleThresholdDeg){
+  const positions = geometry.attributes.position.array;
+  const count = positions.length/3;
+  const triCount = count/3;
+  const cosThreshold = Math.cos(angleThresholdDeg * Math.PI/180);
+
+  // Which object each vertex-slot belongs to, so grouping never crosses an
+  // object boundary — two unrelated objects that happen to touch at a
+  // coincident, near-coplanar point (parts meant to mate flush against
+  // each other, say) would otherwise bleed their shading into one another.
+  const vertexObjectIndex = new Int32Array(count);
+  objectRanges.forEach((r, objIdx) => {
+    for(let v = r.start; v < r.start + r.count; v++) vertexObjectIndex[v] = objIdx;
+  });
+
+  const faceNormals = new Float32Array(triCount*3);
+  for(let t=0;t<triCount;t++){
+    const i0=t*3, i1=t*3+1, i2=t*3+2;
+    const ax=positions[i0*3],ay=positions[i0*3+1],az=positions[i0*3+2];
+    const bx=positions[i1*3],by=positions[i1*3+1],bz=positions[i1*3+2];
+    const cx=positions[i2*3],cy=positions[i2*3+1],cz=positions[i2*3+2];
+    const ux=bx-ax,uy=by-ay,uz=bz-az;
+    const vx=cx-ax,vy=cy-ay,vz=cz-az;
+    let nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+    const len=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;
+    faceNormals[t*3]=nx/len; faceNormals[t*3+1]=ny/len; faceNormals[t*3+2]=nz/len;
+  }
+
+  const groups = new Map();
+  const keys = new Array(count);
+  for(let i=0;i<count;i++){
+    const key = vertexObjectIndex[i]+':'+Math.round(positions[i*3]*1e4)+','+Math.round(positions[i*3+1]*1e4)+','+Math.round(positions[i*3+2]*1e4);
+    keys[i] = key;
+    let list = groups.get(key);
+    if(!list){ list=[]; groups.set(key,list); }
+    list.push(Math.floor(i/3));
+  }
+
+  const normals = new Float32Array(count*3);
+  for(let i=0;i<count;i++){
+    const myTri = Math.floor(i/3);
+    const mnx=faceNormals[myTri*3], mny=faceNormals[myTri*3+1], mnz=faceNormals[myTri*3+2];
+    const group = groups.get(keys[i]);
+    let sx=0,sy=0,sz=0;
+    for(const t of group){
+      const fnx=faceNormals[t*3], fny=faceNormals[t*3+1], fnz=faceNormals[t*3+2];
+      if(mnx*fnx+mny*fny+mnz*fnz >= cosThreshold){ sx+=fnx; sy+=fny; sz+=fnz; }
+    }
+    const len = Math.sqrt(sx*sx+sy*sy+sz*sz) || 1;
+    normals[i*3]=sx/len; normals[i*3+1]=sy/len; normals[i*3+2]=sz/len;
+  }
+
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+}
+
+function applyStretch(){
+  const n = currentNormal;
+  const d1 = Math.min(getPlaneAValue(), getPlaneBValue());
+  const d2 = Math.max(getPlaneAValue(), getPlaneBValue());
+  const s = parseFloat(stretchSlider.value);
+  const rad = parseFloat(radialSlider.value);
+  const overallU = parseFloat(uniformScaleSlider.value);
+  const n0 = currentNormal;
+  if(![d1,d2,s,rad,overallU,n0.x,n0.y,n0.z].every(Number.isFinite)){
+    reportNumericError('applying the stretch', `d1=${d1}, d2=${d2}, s=${s}, rad=${rad}, overallU=${overallU}, normal=(${n0.x},${n0.y},${n0.z})`);
+    return;
+  }
+  lastD1 = d1; lastD2 = d2;
+  ensureBandSubdivision(d1, d2);
+  const pos = mesh.geometry.attributes.position;
+  const arr = pos.array;
+  const span = Math.max(d2-d1, 1e-6);
+
+  objectRanges.forEach((r, objIdx) => {
+    const selected = objectSelected[objIdx];
+    const line = centerAxisLines[objIdx];
+    if(!selected){
+      for(let v=r.start; v<r.start+r.count; v++){
+        const i = v*3;
+        arr[i] = basePositions[i]; arr[i+1] = basePositions[i+1]; arr[i+2] = basePositions[i+2];
+      }
+      if(line) line.visible = false;
+      return;
+    }
+
+    // Each object gets its own central axis for radial scaling — the
+    // vertex centroid of its perpendicular (cross-section) offset — rather
+    // than sharing one axis through the world origin. Otherwise a
+    // multi-part file would balloon every part away from a single shared
+    // point instead of each part bulging around its own middle. Also track
+    // the full (non-decomposed) centroid, used as the pivot for "Overall
+    // size" — a whole-object resize independent of the band.
+    if(r.count === 0){
+      if(line) line.visible = false;
+      return; // nothing to transform or draw a pivot for
+    }
+    let sumX=0, sumY=0, sumZ=0;
+    let sumFullX=0, sumFullY=0, sumFullZ=0;
+    let minT=Infinity, maxT=-Infinity;
+    for(let v=r.start; v<r.start+r.count; v++){
+      const i = v*3;
+      const x0 = basePositions[i], y0 = basePositions[i+1], z0 = basePositions[i+2];
+      const t = x0*n.x + y0*n.y + z0*n.z;
+      sumX += x0-t*n.x; sumY += y0-t*n.y; sumZ += z0-t*n.z;
+      sumFullX += x0; sumFullY += y0; sumFullZ += z0;
+      if(t<minT) minT=t; if(t>maxT) maxT=t;
+    }
+    const cx = sumX/r.count, cy = sumY/r.count, cz = sumZ/r.count;
+    const fullCx = sumFullX/r.count, fullCy = sumFullY/r.count, fullCz = sumFullZ/r.count;
+
+    // Visualize this object's own pivot axis: a line through its center,
+    // running its own axial extent (with a little padding so it visibly
+    // pokes out past the geometry rather than looking flush with it).
+    if(line){
+      const pad = Math.max((maxT-minT) * 0.15, 1e-4);
+      const p1 = { x: cx+(minT-pad)*n.x, y: cy+(minT-pad)*n.y, z: cz+(minT-pad)*n.z };
+      const p2 = { x: cx+(maxT+pad)*n.x, y: cy+(maxT+pad)*n.y, z: cz+(maxT+pad)*n.z };
+      line.geometry.setFromPoints([
+        new THREE.Vector3(p1.x, p1.y, p1.z),
+        new THREE.Vector3(p2.x, p2.y, p2.z)
+      ]);
+      line.visible = true;
+    }
+
+    // Radial scale eases in/out smoothly over this fraction of the band
+    // width at each edge, staying flat at the full `rad` value in between
+    // — an instant jump from 1x to rad right at the plane boundary reads
+    // as a hard step/flange on the surface, especially for smooth round
+    // parts, rather than a natural bulge.
+    const radialEdgeFrac = 0.2;
+    const edgeWidth = Math.max(span * radialEdgeFrac, 1e-6);
+
+    for(let v=r.start; v<r.start+r.count; v++){
+      const i = v*3;
+      const x0 = basePositions[i], y0 = basePositions[i+1], z0 = basePositions[i+2];
+      const t = x0*n.x + y0*n.y + z0*n.z; // signed distance along the (possibly tilted) normal
+      let newT, radialMul;
+      if(t <= d1){
+        newT = t; radialMul = 1;
+      } else if(t >= d2){
+        newT = t + span*(s-1); radialMul = 1;
+      } else {
+        newT = d1 + (t-d1)*s;
+        const distFromD1 = t - d1, distFromD2 = d2 - t;
+        let taper = 1; // 1 = fully at `rad`, 0 = fully back at the untapered edge value
+        if(distFromD1 < edgeWidth){
+          const x = distFromD1 / edgeWidth;
+          taper = x*x*(3-2*x); // smoothstep: eases in with zero slope at both ends
+        } else if(distFromD2 < edgeWidth){
+          const x = distFromD2 / edgeWidth;
+          taper = x*x*(3-2*x);
+        }
+        radialMul = 1 + (rad-1)*taper;
+      }
+      // Decompose into along-normal (t*n) and perpendicular components; the
+      // perpendicular part is further split into "this object's own center"
+      // plus "offset from that center", so only the offset gets scaled.
+      const perpX = x0 - t*n.x, perpY = y0 - t*n.y, perpZ = z0 - t*n.z;
+      const relX = perpX - cx, relY = perpY - cy, relZ = perpZ - cz;
+      let nx = newT*n.x + cx + relX*radialMul;
+      let ny = newT*n.y + cy + relY*radialMul;
+      let nz = newT*n.z + cz + relZ*radialMul;
+      // "Overall size" resizes this whole (selected) object uniformly around
+      // its own full centroid, independent of the band — applied last, on
+      // top of whatever the axial/radial band-stretch already produced.
+      if(overallU !== 1){
+        nx = fullCx + (nx-fullCx)*overallU;
+        ny = fullCy + (ny-fullCy)*overallU;
+        nz = fullCz + (nz-fullCz)*overallU;
+      }
+      arr[i] = nx; arr[i+1] = ny; arr[i+2] = nz;
+    }
+  });
+
+  pos.needsUpdate = true;
+  computeSmartNormals(mesh.geometry, 60);
+  mesh.geometry.computeBoundingBox();
+  updatePlaneMeshes();
+  updateReadout(d1,d2,s,rad);
+}
+
+function updateReadout(d1,d2,s,rad){
+  const originalLen = boundsMax - boundsMin;
+  const newLen = originalLen + (d2-d1)*(s-1);
+  const axisName = AXIS_NAMES[axisIndex];
+  const n = currentNormal;
+  const u = parseFloat(uniformScaleSlider.value);
+  const bbox = mesh.geometry.boundingBox;
+  const dimX = (bbox.max.x-bbox.min.x).toFixed(2);
+  const dimY = (bbox.max.y-bbox.min.y).toFixed(2);
+  const dimZ = (bbox.max.z-bbox.min.z).toFixed(2);
+  readout.innerHTML =
+    `size (X×Y×Z) &nbsp;<b>${dimX} × ${dimY} × ${dimZ}</b><br>` +
+    `axis &nbsp;<b>${axisName}</b> &nbsp;(tilt ${tiltASlider.value}°, ${tiltBSlider.value}°)<br>` +
+    `normal &nbsp;<b>(${n.x.toFixed(2)}, ${n.y.toFixed(2)}, ${n.z.toFixed(2)})</b><br>` +
+    `<span class="a">plane A</span> &nbsp;<b>${d1.toFixed(3)}</b><br>` +
+    `<span class="b">plane B</span> &nbsp;<b>${d2.toFixed(3)}</b><br>` +
+    `band width &nbsp;<b>${(d2-d1).toFixed(3)}</b><br>` +
+    `axial scale &nbsp;<b>${s.toFixed(2)}×</b> &nbsp;·&nbsp; radial scale &nbsp;<b>${rad.toFixed(2)}×</b><br>` +
+    `overall size &nbsp;<b>${u.toFixed(2)}×</b> &nbsp;(selected objects only)<br>` +
+    `original length &nbsp;<b>${originalLen.toFixed(3)}</b><br>` +
+    `new length &nbsp;<b>${newLen.toFixed(3)}</b>`;
+}
+
+function refreshLabels(){
+  if(document.activeElement !== valA) valA.value = getPlaneAValue().toFixed(2);
+  if(document.activeElement !== valB) valB.value = getPlaneBValue().toFixed(2);
+  if(document.activeElement !== valS) valS.value = parseFloat(stretchSlider.value).toFixed(2);
+  if(document.activeElement !== valRadial) valRadial.value = parseFloat(radialSlider.value).toFixed(2);
+  if(document.activeElement !== valUniform) valUniform.value = parseFloat(uniformScaleSlider.value).toFixed(2);
+  if(document.activeElement !== valTiltA) valTiltA.value = tiltASlider.value;
+  if(document.activeElement !== valTiltB) valTiltB.value = tiltBSlider.value;
+}
+
+uniformScaleSlider.addEventListener('input', ()=>{
+  refreshLabels();
+  applyStretch();
+});
+
+// Lets a slider be set by typing an exact number instead of only dragging.
+// Clamped to the slider's own (possibly dynamic, e.g. plane bounds) range;
+// live-updates same as dragging would, and reformats once you click away
+// so it always matches what the slider shows.
+function bindNumberInputToSlider(numberInput, slider, onChange, decimals){
+  if(decimals === undefined) decimals = 2;
+  numberInput.addEventListener('input', ()=>{
+    const min = parseFloat(slider.min), max = parseFloat(slider.max);
+    let v = parseFloat(numberInput.value);
+    if(Number.isNaN(v)) return; // still typing (e.g. "1." or "-") -- wait for a full number
+    v = Math.min(max, Math.max(min, v));
+    slider.value = v;
+    onChange();
+  });
+  numberInput.addEventListener('blur', ()=>{
+    numberInput.value = parseFloat(slider.value).toFixed(decimals);
+  });
+  numberInput.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter') numberInput.blur();
+  });
+}
+bindNumberInputToSlider(valS, stretchSlider, ()=>{ refreshLabels(); applyStretch(); });
+bindNumberInputToSlider(valRadial, radialSlider, ()=>{ refreshLabels(); applyStretch(); });
+bindNumberInputToSlider(valUniform, uniformScaleSlider, ()=>{ refreshLabels(); applyStretch(); });
+bindNumberInputToSlider(valA, planeASlider, ()=>{ commitIfStretched(planeASlider); refreshLabels(); applyStretch(); });
+bindNumberInputToSlider(valB, planeBSlider, ()=>{ commitIfStretched(planeBSlider); refreshLabels(); applyStretch(); });
+
+planeASlider.addEventListener('input', ()=>{
+  commitIfStretched(planeASlider);
+  refreshLabels();
+  applyStretch();
+});
+planeBSlider.addEventListener('input', ()=>{
+  commitIfStretched(planeBSlider);
+  refreshLabels();
+  applyStretch();
+});
+stretchSlider.addEventListener('input', ()=>{
+  refreshLabels();
+  applyStretch();
+});
+radialSlider.addEventListener('input', ()=>{
+  refreshLabels();
+  applyStretch();
+});
+
+// Tilting rotates the shared plane normal. If a stretch is active, bake the
+// current shape in first (shape retained), then recompute bounds for the
+// new tilt direction. Unlike an axis switch, plane positions are NOT reset
+// to defaults here — they keep their numeric value and the cut visually
+// pivots around the origin, which reads as "tilting the blade" rather than
+// restarting your selection.
+function onTiltChange(){
+  bakeCurrentShapeAndCorrectPlanes(null);
+  updateNormal();
+  computeAxisBounds();
+  setSliderRangeToBounds(planeASlider);
+  setSliderRangeToBounds(planeBSlider);
+  planeASlider.value = clamp(parseFloat(planeASlider.value), boundsMin, boundsMax);
+  planeBSlider.value = clamp(parseFloat(planeBSlider.value), boundsMin, boundsMax);
+  refreshLabels();
+  applyStretch();
+}
+tiltASlider.addEventListener('input', onTiltChange);
+tiltBSlider.addEventListener('input', onTiltChange);
+bindNumberInputToSlider(valTiltA, tiltASlider, onTiltChange, 0);
+bindNumberInputToSlider(valTiltB, tiltBSlider, onTiltChange, 0);
+
+axisSelect.addEventListener('change', ()=>{
+  // Switching axis redefines what "the band" means, so this always starts a
+  // fresh default band — but if a stretch was applied, bake the current
+  // shape in first rather than discarding it.
+  bakeCurrentShapeAndCorrectPlanes(null);
+  axisIndex = parseInt(axisSelect.value, 10);
+  tiltASlider.value = 0; tiltBSlider.value = 0;
+  updateTiltLabels();
+  updateNormal();
+  computeAxisBounds();
+  resetPlanesToDefault();
+  refreshLabels();
+  applyStretch();
+});
+
+document.getElementById('btnReset').addEventListener('click', ()=>{
+  if(!loadedIsCustom) loadedFormat = 'stl';
+  uniformScaleSlider.value = 1;
+  setMeshGeometry(loadedIsCustom ? lastLoadedGeometry.clone() : buildDefaultGeometry(), true);
+  refreshLabels();
+});
+
+// ---------- STL / 3MF / OBJ import ----------
+let loadedIsCustom = false;
+let lastLoadedGeometry = null;
+let loadedFormat = 'stl'; // 'stl', '3mf', or 'obj' — drives which format Export writes
+const fileInput = document.getElementById('fileInput');
+const loadingEl = document.getElementById('loading');
+const btnExport = document.getElementById('btnExport');
+document.getElementById('btnUpload').addEventListener('click', ()=> fileInput.click());
+
+function updateExportButtonLabel(){
+  const label = loadedFormat === '3mf' ? '3MF' : loadedFormat === 'obj' ? 'OBJ' : 'STL';
+  btnExport.textContent = `Export stretched ${label}`;
+}
+
+// Many STL/3MF/OBJ exports (this viewer is Y-up, but CAD/slicer conventions
+// are often Z-up since the printer's build plate is the XY plane). Always
+// applied on import: a proper -90° rotation about X, not a naive component
+// swap — a plain swap would mirror the mesh (flip winding/handedness)
+// rather than rotate it.
+function convertZUpToYUp(geometry){
+  const pos = geometry.attributes.position;
+  const arr = pos.array;
+  for(let i=0; i<arr.length; i+=3){
+    const x = arr[i], y = arr[i+1], z = arr[i+2];
+    arr[i] = x; arr[i+1] = z; arr[i+2] = -y;
+  }
+  pos.needsUpdate = true;
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+fileInput.addEventListener('change', (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const is3mf = /\.3mf$/i.test(file.name);
+  const isObj = /\.obj$/i.test(file.name);
+  loadingEl.textContent = is3mf ? 'unzipping…' : 'parsing…';
+  loadingEl.style.display = 'block';
+  const reader = new FileReader();
+  reader.onload = async function(ev){
+    try{
+      let geo;
+      if(is3mf) geo = await parse3MF(ev.target.result);
+      else if(isObj) geo = parseOBJ(new TextDecoder().decode(ev.target.result));
+      else geo = parseSTL(ev.target.result);
+      convertZUpToYUp(geo);
+      lastLoadedGeometry = geo.clone();
+      loadedIsCustom = true;
+      loadedFormat = is3mf ? '3mf' : (isObj ? 'obj' : 'stl');
+      updateExportButtonLabel();
+      exportNameInput.value = file.name.replace(/\.[a-zA-Z0-9]{1,5}$/, '') + '_stretched';
+      setMeshGeometry(geo, true);
+      refreshLabels();
+    } catch(err){
+      alert('Could not parse this file: ' + err.message);
+    } finally {
+      loadingEl.style.display = 'none';
+      loadingEl.textContent = 'parsing…';
+      fileInput.value = '';
+    }
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+// OBJ is a plain-text format: "v x y z" for vertices, "f i j k ..." for
+// faces (1-indexed, n-gons get fan-triangulated), and optional "o name" /
+// "g name" lines marking sub-objects — reused the same way 3MF build items
+// are, so named groups become independently selectable/stretchable objects.
+function parseOBJ(text){
+  const positionsRaw = [];
+  const faces = [];
+  const objectBoundaries = [];
+  const lines = text.split(/\r\n|\r|\n/);
+  for(const line of lines){
+    const trimmed = line.trim();
+    if(!trimmed || trimmed[0] === '#') continue;
+    const parts = trimmed.split(/\s+/);
+    const tag = parts[0];
+    if(tag === 'v'){
+      positionsRaw.push([parseFloat(parts[1]), parseFloat(parts[2]), parseFloat(parts[3])]);
+    } else if(tag === 'o' || tag === 'g'){
+      objectBoundaries.push({ name: parts.slice(1).join(' ') || null, faceStart: faces.length });
+    } else if(tag === 'f'){
+      const idxs = parts.slice(1).map(p => {
+        const vi = parseInt(p.split('/')[0], 10);
+        return vi > 0 ? vi - 1 : positionsRaw.length + vi; // OBJ allows negative (relative) indices
+      });
+      for(let k=1; k<idxs.length-1; k++){ // fan-triangulate n-gons
+        faces.push([idxs[0], idxs[k], idxs[k+1]]);
+      }
+    }
+  }
+  if(faces.length === 0) throw new Error('no face data found in this OBJ file');
+
+  const positions = new Float32Array(faces.length*9);
+  for(let f=0; f<faces.length; f++){
+    for(let v=0; v<3; v++){
+      const p = positionsRaw[faces[f][v]];
+      if(!p) continue;
+      positions[f*9+v*3] = p[0]; positions[f*9+v*3+1] = p[1]; positions[f*9+v*3+2] = p[2];
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.computeVertexNormals();
+
+  if(objectBoundaries.length > 0){
+    if(objectBoundaries[0].faceStart > 0){
+      objectBoundaries.unshift({ name: null, faceStart: 0 }); // faces before the first o/g marker
+    }
+    const ranges = [];
+    for(let i=0; i<objectBoundaries.length; i++){
+      const startFace = objectBoundaries[i].faceStart;
+      const endFace = (i+1 < objectBoundaries.length) ? objectBoundaries[i+1].faceStart : faces.length;
+      const count = (endFace - startFace) * 3;
+      if(count > 0){
+        ranges.push({ name: objectBoundaries[i].name || `Object ${ranges.length+1}`, start: startFace*3, count });
+      }
+    }
+    if(ranges.length > 1) geo.userData.objectRanges = ranges;
+  }
+  return geo;
+}
+
+function parseSTL(buffer){
+  const dv = new DataView(buffer);
+  function isBinary(){
+    if(buffer.byteLength < 84) return false;
+    const faceBytes = 50;
+    const nFaces = dv.getUint32(80, true);
+    const expected = 84 + faceBytes*nFaces;
+    if(expected === buffer.byteLength) return true;
+    const head = new Uint8Array(buffer, 0, 5);
+    const solid = [115,111,108,105,100]; // 's','o','l','i','d'
+    for(let i=0;i<5;i++){ if(head[i]!==solid[i]) return true; }
+    return false;
+  }
+  return isBinary() ? parseBinarySTL(dv) : parseASCIISTL(buffer);
+}
+
+function parseBinarySTL(dv){
+  const nFaces = dv.getUint32(80, true);
+  const positions = new Float32Array(nFaces*9);
+  let offset = 84;
+  for(let f=0; f<nFaces; f++){
+    offset += 12; // skip stored normal, we recompute
+    for(let v=0; v<3; v++){
+      const base = f*9+v*3;
+      positions[base]   = dv.getFloat32(offset, true);
+      positions[base+1] = dv.getFloat32(offset+4, true);
+      positions[base+2] = dv.getFloat32(offset+8, true);
+      offset += 12;
+    }
+    offset += 2; // attribute byte count
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function parseASCIISTL(buffer){
+  const text = new TextDecoder().decode(buffer);
+  const verts = [];
+  const re = /vertex\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)/g;
+  let m;
+  while((m = re.exec(text)) !== null){
+    verts.push(parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3]));
+  }
+  if(verts.length === 0) throw new Error('no vertex data found');
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// ---------- 3MF import ----------
+// 3MF files are ZIP archives. The geometry usually lives in 3D/3dmodel.model
+// as <object> elements containing <mesh> vertex/triangle data. Objects can
+// reference other objects via <components>, each with its own <transform>,
+// and the <build> section places top-level objects into the scene with a
+// further transform.
+//
+// Slicers that use the 3MF "Production Extension" (BambuStudio, OrcaSlicer,
+// PrusaSlicer, etc.) commonly split each object out into its own part file
+// under 3D/Objects/*.model, and reference it from the root file via a
+// p:path attribute on <component> (and sometimes <item>) instead of putting
+// the mesh inline. We have to follow those cross-file references or we end
+// up with zero triangles.
+async function parse3MF(buffer){
+  if(typeof JSZip === 'undefined') throw new Error('3MF support library failed to load');
+  const zip = await JSZip.loadAsync(buffer);
+
+  const PROD_NS = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
+  function getPathAttr(el){
+    return (el.getAttributeNS && el.getAttributeNS(PROD_NS, 'path'))
+        || el.getAttribute('p:path')
+        || el.getAttribute('path')
+        || null;
+  }
+  function normalizePath(p){ return p.replace(/^\/+/, ''); }
+
+  const modelDocCache = new Map();
+  async function loadModelDoc(path){
+    const norm = normalizePath(path);
+    if(modelDocCache.has(norm)) return modelDocCache.get(norm);
+    let file = zip.file(norm);
+    if(!file){
+      const found = Object.keys(zip.files).find(p => normalizePath(p).toLowerCase() === norm.toLowerCase());
+      if(found) file = zip.file(found);
+    }
+    if(!file) throw new Error('referenced part file not found in archive: ' + path);
+    const text = await file.async('text');
+    const xml = new DOMParser().parseFromString(text, 'application/xml');
+    if(xml.getElementsByTagName('parsererror').length){
+      throw new Error('invalid XML in part file: ' + path);
+    }
+    const objects = {};
+    const objectEls = xml.getElementsByTagName('object');
+    for(let i=0;i<objectEls.length;i++){
+      objects[objectEls[i].getAttribute('id')] = objectEls[i];
+    }
+    const result = { xml, objects, path: norm };
+    modelDocCache.set(norm, result);
+    return result;
+  }
+
+  let rootPath = '3D/3dmodel.model';
+  if(!zip.file(rootPath)){
+    const found = Object.keys(zip.files).find(p => /\.model$/i.test(p));
+    if(!found) throw new Error('no 3dmodel.model found inside the 3MF archive');
+    rootPath = found;
+  }
+  const rootDoc = await loadModelDoc(rootPath);
+
+  // BambuStudio/OrcaSlicer store human-readable object names in a separate
+  // metadata file, not in 3D/3dmodel.model itself. Best-effort only — if
+  // it's missing or doesn't parse, we just fall back to generic names.
+  const objectNames = {};
+  try{
+    const settingsFile = zip.file('Metadata/model_settings.config');
+    if(settingsFile){
+      const settingsText = await settingsFile.async('text');
+      const settingsXML = new DOMParser().parseFromString(settingsText, 'application/xml');
+      const objectEls = settingsXML.getElementsByTagName('object');
+      for(let i=0;i<objectEls.length;i++){
+        const objEl = objectEls[i];
+        const id = objEl.getAttribute('id');
+        const metas = objEl.getElementsByTagName('metadata');
+        for(let m=0;m<metas.length;m++){
+          if(metas[m].getAttribute('key') === 'name'){
+            objectNames[id] = metas[m].getAttribute('value');
+            break; // first match is the object-level name, not a nested part's
+          }
+        }
+      }
+    }
+  } catch(e){ /* metadata is a bonus, not required — ignore failures */ }
+
+  // 3MF transforms: 12 numbers, row-major 4x3, translation in the last row.
+  // A point transforms as: p' = p * R + T  (row-vector convention)
+  const IDENTITY = [1,0,0, 0,1,0, 0,0,1, 0,0,0];
+  function parseTransformAttr(str){
+    if(!str) return IDENTITY;
+    const n = str.trim().split(/\s+/).map(Number);
+    return (n.length === 12 && n.every(v=>!isNaN(v))) ? n : IDENTITY;
+  }
+  function applyTransform(x,y,z,t){
+    return [
+      x*t[0] + y*t[3] + z*t[6] + t[9],
+      x*t[1] + y*t[4] + z*t[7] + t[10],
+      x*t[2] + y*t[5] + z*t[8] + t[11]
+    ];
+  }
+  // Compose "apply child transform first, then parent transform".
+  function composeTransform(child, parent){
+    const R1=[[child[0],child[1],child[2]],[child[3],child[4],child[5]],[child[6],child[7],child[8]]];
+    const T1=[child[9],child[10],child[11]];
+    const R2=[[parent[0],parent[1],parent[2]],[parent[3],parent[4],parent[5]],[parent[6],parent[7],parent[8]]];
+    const T2=[parent[9],parent[10],parent[11]];
+    const R=[[0,0,0],[0,0,0],[0,0,0]];
+    for(let i=0;i<3;i++) for(let j=0;j<3;j++){
+      let s=0; for(let k=0;k<3;k++) s += R1[i][k]*R2[k][j];
+      R[i][j]=s;
+    }
+    const T=[0,0,0];
+    for(let j=0;j<3;j++){
+      let s=0; for(let k=0;k<3;k++) s += T1[k]*R2[k][j];
+      T[j]=s+T2[j];
+    }
+    return [R[0][0],R[0][1],R[0][2], R[1][0],R[1][1],R[1][2], R[2][0],R[2][1],R[2][2], T[0],T[1],T[2]];
+  }
+
+  const positions = [];
+  const visiting = new Set(); // guards against malformed circular refs, keyed by "path#id"
+
+  async function emitObject(objEl, transform, ownerObjects, ownerPath){
+    const key = ownerPath + '#' + objEl.getAttribute('id');
+    if(visiting.has(key)) return;
+    visiting.add(key);
+
+    const meshEl = objEl.getElementsByTagName('mesh')[0];
+    if(meshEl){
+      const vertEls = meshEl.getElementsByTagName('vertex');
+      const verts = new Array(vertEls.length);
+      for(let i=0;i<vertEls.length;i++){
+        verts[i] = [
+          parseFloat(vertEls[i].getAttribute('x')),
+          parseFloat(vertEls[i].getAttribute('y')),
+          parseFloat(vertEls[i].getAttribute('z'))
+        ];
+      }
+      const triEls = meshEl.getElementsByTagName('triangle');
+      for(let i=0;i<triEls.length;i++){
+        const tri = triEls[i];
+        const idx = [
+          parseInt(tri.getAttribute('v1'),10),
+          parseInt(tri.getAttribute('v2'),10),
+          parseInt(tri.getAttribute('v3'),10)
+        ];
+        for(const vi of idx){
+          const p = verts[vi];
+          if(!p) continue;
+          const tp = applyTransform(p[0],p[1],p[2], transform);
+          positions.push(tp[0],tp[1],tp[2]);
+        }
+      }
+    }
+
+    const compEl = objEl.getElementsByTagName('components')[0];
+    if(compEl){
+      const comps = compEl.getElementsByTagName('component');
+      for(let i=0;i<comps.length;i++){
+        const c = comps[i];
+        const combined = composeTransform(parseTransformAttr(c.getAttribute('transform')), transform);
+        const refId = c.getAttribute('objectid');
+        const path = getPathAttr(c);
+        if(path){
+          const doc = await loadModelDoc(path);
+          const refObj = doc.objects[refId];
+          if(refObj) await emitObject(refObj, combined, doc.objects, doc.path);
+        } else {
+          const refObj = ownerObjects[refId];
+          if(refObj) await emitObject(refObj, combined, ownerObjects, ownerPath);
+        }
+      }
+    }
+    visiting.delete(key);
+  }
+
+  const buildEl = rootDoc.xml.getElementsByTagName('build')[0];
+  if(!buildEl) throw new Error('the 3MF file has no <build> section');
+  const items = buildEl.getElementsByTagName('item');
+  const objectRanges = [];
+  for(let i=0;i<items.length;i++){
+    const item = items[i];
+    const refId = item.getAttribute('objectid');
+    const path = getPathAttr(item);
+    const transform = parseTransformAttr(item.getAttribute('transform'));
+    const vertStart = positions.length / 3;
+    if(path){
+      const doc = await loadModelDoc(path);
+      const objEl = doc.objects[refId];
+      if(objEl) await emitObject(objEl, transform, doc.objects, doc.path);
+    } else {
+      const objEl = rootDoc.objects[refId];
+      if(objEl) await emitObject(objEl, transform, rootDoc.objects, rootDoc.path);
+    }
+    const vertCount = positions.length/3 - vertStart;
+    if(vertCount > 0){
+      const friendlyName = objectNames[refId];
+      const label = friendlyName ? `${friendlyName} (#${refId})` : `Object ${objectRanges.length+1} (#${refId})`;
+      objectRanges.push({ name: label, start: vertStart, count: vertCount });
+    }
+  }
+
+  if(positions.length === 0) throw new Error('no triangle data found in this 3MF file');
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geo.computeVertexNormals();
+  geo.userData.objectRanges = objectRanges;
+  return geo;
+}
+
+// ---------- export (matches whatever format was imported) ----------
+function downloadBlob(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+const exportNameInput = document.getElementById('exportName');
+function getExportFilename(ext){
+  let name = exportNameInput.value.trim();
+  name = name.replace(/\.[a-zA-Z0-9]{1,5}$/, ''); // drop a typed extension, we always append the right one
+  name = name.replace(/[\\/:*?"<>|]/g, '_').trim(); // strip characters invalid in filenames
+  if(!name) name = 'stretched';
+  return name + '.' + ext;
+}
+
+btnExport.addEventListener('click', async ()=>{
+  const exportGeo = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
+  if(loadedFormat === '3mf'){
+    if(typeof JSZip === 'undefined'){ alert('3MF export library failed to load.'); return; }
+    const blob = await export3MF(exportGeo);
+    downloadBlob(blob, getExportFilename('3mf'));
+  } else if(loadedFormat === 'obj'){
+    const blob = exportOBJ(exportGeo);
+    downloadBlob(blob, getExportFilename('obj'));
+  } else {
+    const buffer = exportBinarySTL(exportGeo);
+    const blob = new Blob([buffer], { type:'application/octet-stream' });
+    downloadBlob(blob, getExportFilename('stl'));
+  }
+});
+
+// Vertex-deduplicated OBJ writer (same dedup approach as the 3MF exporter,
+// so the file isn't 3x larger than necessary from the per-triangle layout).
+function exportOBJ(geometry){
+  const arr = geometry.attributes.position.array;
+  const vertexMap = new Map();
+  const vertices = [];
+  const triangles = [];
+  const keyFor = (x,y,z) => x.toFixed(6)+','+y.toFixed(6)+','+z.toFixed(6);
+
+  for(let i=0; i<arr.length; i+=9){
+    const idx = [];
+    for(let v=0; v<3; v++){
+      const x=arr[i+v*3], y=arr[i+v*3+1], z=arr[i+v*3+2];
+      const key = keyFor(x,y,z);
+      let vi = vertexMap.get(key);
+      if(vi === undefined){
+        vi = vertices.length;
+        vertices.push([x,y,z]);
+        vertexMap.set(key, vi);
+      }
+      idx.push(vi);
+    }
+    triangles.push(idx);
+  }
+
+  let out = '# exported from Stretch\n';
+  for(const v of vertices) out += `v ${v[0]} ${v[1]} ${v[2]}\n`;
+  for(const t of triangles) out += `f ${t[0]+1} ${t[1]+1} ${t[2]+1}\n`; // OBJ is 1-indexed
+  return new Blob([out], { type:'text/plain' });
+}
+
+function exportBinarySTL(geometry){
+  const pos = geometry.attributes.position;
+  const nTri = pos.count/3;
+  const bufferLength = 84 + 50*nTri;
+  const arrayBuffer = new ArrayBuffer(bufferLength);
+  const dv = new DataView(arrayBuffer);
+  dv.setUint32(80, nTri, true);
+  let offset = 84;
+  const a=new THREE.Vector3(), b=new THREE.Vector3(), c=new THREE.Vector3();
+  const cb=new THREE.Vector3(), ab=new THREE.Vector3(), n=new THREE.Vector3();
+  for(let i=0;i<nTri;i++){
+    a.fromBufferAttribute(pos, i*3);
+    b.fromBufferAttribute(pos, i*3+1);
+    c.fromBufferAttribute(pos, i*3+2);
+    cb.subVectors(c,b); ab.subVectors(a,b); n.crossVectors(cb,ab).normalize();
+    dv.setFloat32(offset, n.x, true); dv.setFloat32(offset+4, n.y, true); dv.setFloat32(offset+8, n.z, true);
+    offset += 12;
+    [a,b,c].forEach(v=>{
+      dv.setFloat32(offset, v.x, true); dv.setFloat32(offset+4, v.y, true); dv.setFloat32(offset+8, v.z, true);
+      offset += 12;
+    });
+    dv.setUint16(offset, 0, true); offset += 2;
+  }
+  return arrayBuffer;
+}
+
+// Writes a minimal but spec-valid 3MF package: [Content_Types].xml, the
+// root relationship, and a single-object 3D/3dmodel.model. Vertices are
+// deduplicated (unlike the per-triangle STL layout) so the file isn't
+// needlessly 3x larger than it needs to be.
+async function export3MF(geometry){
+  const pos = geometry.attributes.position;
+  const arr = pos.array;
+
+  const vertexMap = new Map();
+  const vertices = [];
+  const triangles = [];
+  const keyFor = (x,y,z) => x.toFixed(6)+','+y.toFixed(6)+','+z.toFixed(6);
+
+  for(let i=0; i<arr.length; i+=9){
+    const idx = [];
+    for(let v=0; v<3; v++){
+      const x=arr[i+v*3], y=arr[i+v*3+1], z=arr[i+v*3+2];
+      const key = keyFor(x,y,z);
+      let vi = vertexMap.get(key);
+      if(vi === undefined){
+        vi = vertices.length;
+        vertices.push([x,y,z]);
+        vertexMap.set(key, vi);
+      }
+      idx.push(vi);
+    }
+    triangles.push(idx);
+  }
+
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+  let modelXML = '<?xml version="1.0" encoding="UTF-8"?>\n';
+  modelXML += '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">\n';
+  modelXML += ' <resources>\n';
+  modelXML += '  <object id="1" type="model">\n';
+  modelXML += '   <mesh>\n';
+  modelXML += '    <vertices>\n';
+  for(const v of vertices){
+    modelXML += `     <vertex x="${esc(v[0])}" y="${esc(v[1])}" z="${esc(v[2])}"/>\n`;
+  }
+  modelXML += '    </vertices>\n';
+  modelXML += '    <triangles>\n';
+  for(const t of triangles){
+    modelXML += `     <triangle v1="${t[0]}" v2="${t[1]}" v3="${t[2]}"/>\n`;
+  }
+  modelXML += '    </triangles>\n';
+  modelXML += '   </mesh>\n';
+  modelXML += '  </object>\n';
+  modelXML += ' </resources>\n';
+  modelXML += ' <build>\n';
+  modelXML += '  <item objectid="1"/>\n';
+  modelXML += ' </build>\n';
+  modelXML += '</model>\n';
+
+  const contentTypesXML =
+    '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n' +
+    '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n' +
+    '  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>\n' +
+    '</Types>\n';
+
+  const relsXML =
+    '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n' +
+    '  <Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>\n' +
+    '</Relationships>\n';
+
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', contentTypesXML);
+  zip.file('_rels/.rels', relsXML);
+  zip.file('3D/3dmodel.model', modelXML);
+  return zip.generateAsync({ type:'blob' });
+}
+
+// ---------- init ----------
+setMeshGeometry(buildDefaultGeometry(), true);
+refreshLabels();
+
+// ---------- render loop / resize ----------
+function onResize(){
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+  syncOrthoCamera();
+  renderer.setSize(w,h);
+}
+window.addEventListener('resize', onResize);
+
+const projToggle = document.getElementById('projToggle');
+projToggle.addEventListener('click', ()=>{
+  activeCamera = (activeCamera === camera) ? orthoCamera : camera;
+  projToggle.textContent = (activeCamera === camera) ? 'Perspective' : 'Orthographic';
+  syncOrthoCamera();
+});
+
+function animate(){
+  requestAnimationFrame(animate);
+  renderer.render(scene, activeCamera);
+  renderGizmo();
+}
+animate();
+
+})();
+</script>
+</body>
+</html>
