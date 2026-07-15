@@ -1025,6 +1025,25 @@ function computeBandCutPositions(d1, d2){
   return cuts;
 }
 
+// Subdivision is only actually useful where the surface needs to curve —
+// the two taper zones. If an object's mesh already has a handful of real
+// vertices in both of them, cutting it further wouldn't visibly change
+// anything, so skip the (potentially expensive) re-triangulation entirely.
+function objectNeedsSubdivision(r, n, d1, d2){
+  const span = d2 - d1;
+  const edgeWidth = Math.max(span * 0.2, 1e-6);
+  const MIN_POINTS_PER_TAPER_ZONE = 2;
+  let lowerCount = 0, upperCount = 0;
+  for(let v = r.start; v < r.start + r.count; v++){
+    const i = v*3;
+    const t = basePositions[i]*n.x + basePositions[i+1]*n.y + basePositions[i+2]*n.z;
+    if(t > d1 && t < d1 + edgeWidth) lowerCount++;
+    else if(t > d2 - edgeWidth && t < d2) upperCount++;
+    if(lowerCount >= MIN_POINTS_PER_TAPER_ZONE && upperCount >= MIN_POINTS_PER_TAPER_ZONE) return false;
+  }
+  return true;
+}
+
 let lastSubdivisionKey = null;
 // Rebuilds basePositions/objectRanges (and the live geometry's attributes
 // to match) so that every SELECTED object has real vertices at the band
@@ -1042,6 +1061,9 @@ function ensureBandSubdivision(d1, d2){
   const key = [d1.toFixed(6), d2.toFixed(6), n.x.toFixed(5), n.y.toFixed(5), n.z.toFixed(5), objectSelected.join('')].join('|');
   if(key === lastSubdivisionKey) return;
   lastSubdivisionKey = key;
+
+  const anyObjectNeedsIt = objectRanges.some((r, objIdx) => objectSelected[objIdx] && objectNeedsSubdivision(r, n, d1, d2));
+  if(!anyObjectNeedsIt) return; // every selected object already has enough geometry in the taper zones
 
   const cuts = computeBandCutPositions(d1, d2);
   const newObjectRanges = [];
@@ -1061,7 +1083,8 @@ function ensureBandSubdivision(d1, d2){
   objectRanges.forEach((r, objIdx) => {
     const slice = basePositions.slice(r.start*3, (r.start+r.count)*3);
     const alreadyFine = (slice.length/9) > MAX_TRIANGLES_PER_OBJECT;
-    if(!objectSelected[objIdx] || alreadyFine){
+    const notNeeded = !objectNeedsSubdivision(r, n, d1, d2);
+    if(!objectSelected[objIdx] || alreadyFine || notNeeded){
       newPositionsChunks.push(slice);
       newObjectRanges.push({ name: r.name, start: cursor, count: r.count });
       cursor += r.count;
@@ -1193,7 +1216,7 @@ function applyStretch(){
     return;
   }
   lastD1 = d1; lastD2 = d2;
-  ensureBandSubdivision(d1, d2);
+  if(isDeformed()) ensureBandSubdivision(d1, d2);
   const pos = mesh.geometry.attributes.position;
   const arr = pos.array;
   const span = Math.max(d2-d1, 1e-6);
