@@ -9,7 +9,7 @@ to stay attached, but is never distorted.
 No install, no build step — it's a single self-contained HTML file. Open
 it in a browser, or host it anywhere static files are served.
 
-**[Open the tool](./index.html)**
+**[Open the tool](https://vibe-coded-goodies.github.io/stretch-tool/)**
 
 ## Features
 
