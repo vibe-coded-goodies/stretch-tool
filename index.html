@@ -191,7 +191,7 @@
   </div>
   <div id="viewport">
     <div id="loading">parsing&hellip;</div>
-    <button id="projToggle" title="Switch between perspective and orthographic view">Perspective</button>
+    <button id="projToggle" title="Switch between perspective and orthographic view">Orthographic</button>
     <div id="hint">drag — orbit &nbsp;·&nbsp; right-drag — pan &nbsp;·&nbsp; +shift — 1 axis &nbsp;·&nbsp; scroll — zoom</div>
     <div id="errorBanner"></div>
   </div>
@@ -322,7 +322,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 // resizes its frustum to match — so toggling projection mid-session doesn't
 // jump the view.
 const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
-let activeCamera = camera;
+let activeCamera = orthoCamera;
 
 function syncOrthoCamera(){
   orthoCamera.position.copy(camera.position);
@@ -619,11 +619,13 @@ function setMeshGeometry(geometry, recenter){
     geometry = geometry.toNonIndexed();
   }
   geometry.computeBoundingBox();
+  loadedRecenterOffset = {x:0, y:0, z:0};
   if(recenter){
     const c = new THREE.Vector3();
     geometry.boundingBox.getCenter(c);
     geometry.translate(-c.x, -c.y, -c.z);
     geometry.computeBoundingBox();
+    loadedRecenterOffset = {x:c.x, y:c.y, z:c.z};
   }
   mesh = new THREE.Mesh(geometry, material);
   modelGroup.add(mesh);
@@ -636,6 +638,7 @@ function setMeshGeometry(geometry, recenter){
     ? geometry.userData.objectRanges
     : [{ name: 'Object 1', start: 0, count: basePositions.length/3 }];
   objectSelected = objectRanges.map(() => true); // none specified -> all selected, per spec
+  objectModifiedFlags = objectRanges.map(() => false);
   updateObjectColors();
   rebuildCenterAxisLines();
   document.getElementById('objectsSection').style.display = objectRanges.length > 1 ? 'block' : 'none';
@@ -1216,7 +1219,8 @@ function applyStretch(){
     return;
   }
   lastD1 = d1; lastD2 = d2;
-  if(isDeformed()) ensureBandSubdivision(d1, d2);
+  const deformed = isDeformed();
+  if(deformed) ensureBandSubdivision(d1, d2);
   const pos = mesh.geometry.attributes.position;
   const arr = pos.array;
   const span = Math.max(d2-d1, 1e-6);
@@ -1232,6 +1236,7 @@ function applyStretch(){
       if(line) line.visible = false;
       return;
     }
+    if(deformed) objectModifiedFlags[objIdx] = true;
 
     // Each object gets its own central axis for radial scaling — the
     // vertex centroid of its perpendicular (cross-section) offset — rather
@@ -1461,6 +1466,16 @@ document.getElementById('btnReset').addEventListener('click', ()=>{
 let loadedIsCustom = false;
 let lastLoadedGeometry = null;
 let loadedFormat = 'stl'; // 'stl', '3mf', or 'obj' — drives which format Export writes
+let loadedRecenterOffset = {x:0, y:0, z:0}; // undoes setMeshGeometry's bbox-centering, for 3MF passthrough export
+// When the loaded file is a real 3MF, these let export patch deformed
+// geometry back into the ORIGINAL archive — every file, object, material,
+// color, and piece of metadata that wasn't actually touched stays exactly
+// as it was, byte for byte, instead of being rebuilt from scratch.
+let loaded3MFZip = null;
+let loaded3MFRootPath = null;
+let loaded3MFProvenance = null; // parallel to objectRanges
+let loaded3MFItemInfo = null;   // parallel to objectRanges — which <item> to redirect on export
+let objectModifiedFlags = [];   // parallel to objectRanges — true once an object has actually been deformed
 const fileInput = document.getElementById('fileInput');
 const loadingEl = document.getElementById('loading');
 const btnExport = document.getElementById('btnExport');
@@ -1506,6 +1521,14 @@ fileInput.addEventListener('change', (e)=>{
       lastLoadedGeometry = geo.clone();
       loadedIsCustom = true;
       loadedFormat = is3mf ? '3mf' : (isObj ? 'obj' : 'stl');
+      if(is3mf){
+        loaded3MFZip = geo.userData.threeMFZip || null;
+        loaded3MFRootPath = geo.userData.threeMFRootPath || null;
+        loaded3MFProvenance = geo.userData.threeMFProvenance || null;
+        loaded3MFItemInfo = geo.userData.threeMFItemInfo || null;
+      } else {
+        loaded3MFZip = null; loaded3MFRootPath = null; loaded3MFProvenance = null; loaded3MFItemInfo = null;
+      }
       updateExportButtonLabel();
       exportNameInput.value = file.name.replace(/\.[a-zA-Z0-9]{1,5}$/, '') + '_stretched';
       setMeshGeometry(geo, true);
@@ -1647,6 +1670,69 @@ function parseASCIISTL(buffer){
 // p:path attribute on <component> (and sometimes <item>) instead of putting
 // the mesh inline. We have to follow those cross-file references or we end
 // up with zero triangles.
+// 3MF transforms: 12 numbers, row-major 4x3, translation in the last row.
+// A point transforms as: p' = p * R + T  (row-vector convention)
+const IDENTITY = [1,0,0, 0,1,0, 0,0,1, 0,0,0];
+function parseTransformAttr(str){
+  if(!str) return IDENTITY;
+  const n = str.trim().split(/\s+/).map(Number);
+  return (n.length === 12 && n.every(v=>!isNaN(v))) ? n : IDENTITY;
+}
+function applyTransform(x,y,z,t){
+  return [
+    x*t[0] + y*t[3] + z*t[6] + t[9],
+    x*t[1] + y*t[4] + z*t[7] + t[10],
+    x*t[2] + y*t[5] + z*t[8] + t[11]
+  ];
+}
+// Compose "apply child transform first, then parent transform".
+function composeTransform(child, parent){
+  const R1=[[child[0],child[1],child[2]],[child[3],child[4],child[5]],[child[6],child[7],child[8]]];
+  const T1=[child[9],child[10],child[11]];
+  const R2=[[parent[0],parent[1],parent[2]],[parent[3],parent[4],parent[5]],[parent[6],parent[7],parent[8]]];
+  const T2=[parent[9],parent[10],parent[11]];
+  const R=[[0,0,0],[0,0,0],[0,0,0]];
+  for(let i=0;i<3;i++) for(let j=0;j<3;j++){
+    let s=0; for(let k=0;k<3;k++) s += R1[i][k]*R2[k][j];
+    R[i][j]=s;
+  }
+  const T=[0,0,0];
+  for(let j=0;j<3;j++){
+    let s=0; for(let k=0;k<3;k++) s += T1[k]*R2[k][j];
+    T[j]=s+T2[j];
+  }
+  return [R[0][0],R[0][1],R[0][2], R[1][0],R[1][1],R[1][2], R[2][0],R[2][1],R[2][2], T[0],T[1],T[2]];
+}
+
+// Inverts a 3MF transform (in the same flat 12-value format), so a
+// deformed WORLD-space point can be mapped back into the LOCAL space a
+// part file's <vertex> elements are actually written in — needed to
+// patch geometry back into an object's original file without touching
+// anything else in that file.
+function invertMat3(m){
+  const [[a,b,c],[d,e,f],[g,h,i]] = m;
+  const det = a*(e*i-f*h) - b*(d*i-f*g) + c*(d*h-e*g);
+  if(Math.abs(det) < 1e-12) return null;
+  const invDet = 1/det;
+  return [
+    [ (e*i-f*h)*invDet, (c*h-b*i)*invDet, (b*f-c*e)*invDet ],
+    [ (f*g-d*i)*invDet, (a*i-c*g)*invDet, (c*d-a*f)*invDet ],
+    [ (d*h-e*g)*invDet, (b*g-a*h)*invDet, (a*e-b*d)*invDet ]
+  ];
+}
+function invertTransform(t){
+  const M = [[t[0],t[3],t[6]], [t[1],t[4],t[7]], [t[2],t[5],t[8]]];
+  const Minv = invertMat3(M);
+  if(!Minv) return null;
+  const T = [t[9], t[10], t[11]];
+  const T2 = [
+    -(Minv[0][0]*T[0] + Minv[0][1]*T[1] + Minv[0][2]*T[2]),
+    -(Minv[1][0]*T[0] + Minv[1][1]*T[1] + Minv[1][2]*T[2]),
+    -(Minv[2][0]*T[0] + Minv[2][1]*T[1] + Minv[2][2]*T[2])
+  ];
+  return [Minv[0][0],Minv[1][0],Minv[2][0], Minv[0][1],Minv[1][1],Minv[2][1], Minv[0][2],Minv[1][2],Minv[2][2], T2[0],T2[1],T2[2]];
+}
+
 async function parse3MF(buffer){
   if(typeof JSZip === 'undefined') throw new Error('3MF support library failed to load');
   const zip = await JSZip.loadAsync(buffer);
@@ -1717,41 +1803,8 @@ async function parse3MF(buffer){
     }
   } catch(e){ /* metadata is a bonus, not required — ignore failures */ }
 
-  // 3MF transforms: 12 numbers, row-major 4x3, translation in the last row.
-  // A point transforms as: p' = p * R + T  (row-vector convention)
-  const IDENTITY = [1,0,0, 0,1,0, 0,0,1, 0,0,0];
-  function parseTransformAttr(str){
-    if(!str) return IDENTITY;
-    const n = str.trim().split(/\s+/).map(Number);
-    return (n.length === 12 && n.every(v=>!isNaN(v))) ? n : IDENTITY;
-  }
-  function applyTransform(x,y,z,t){
-    return [
-      x*t[0] + y*t[3] + z*t[6] + t[9],
-      x*t[1] + y*t[4] + z*t[7] + t[10],
-      x*t[2] + y*t[5] + z*t[8] + t[11]
-    ];
-  }
-  // Compose "apply child transform first, then parent transform".
-  function composeTransform(child, parent){
-    const R1=[[child[0],child[1],child[2]],[child[3],child[4],child[5]],[child[6],child[7],child[8]]];
-    const T1=[child[9],child[10],child[11]];
-    const R2=[[parent[0],parent[1],parent[2]],[parent[3],parent[4],parent[5]],[parent[6],parent[7],parent[8]]];
-    const T2=[parent[9],parent[10],parent[11]];
-    const R=[[0,0,0],[0,0,0],[0,0,0]];
-    for(let i=0;i<3;i++) for(let j=0;j<3;j++){
-      let s=0; for(let k=0;k<3;k++) s += R1[i][k]*R2[k][j];
-      R[i][j]=s;
-    }
-    const T=[0,0,0];
-    for(let j=0;j<3;j++){
-      let s=0; for(let k=0;k<3;k++) s += T1[k]*R2[k][j];
-      T[j]=s+T2[j];
-    }
-    return [R[0][0],R[0][1],R[0][2], R[1][0],R[1][1],R[1][2], R[2][0],R[2][1],R[2][2], T[0],T[1],T[2]];
-  }
-
   const positions = [];
+  const leafProvenance = []; // {filePath, objectId, vertStart, vertCount, transform} per leaf <mesh> emitted
   const visiting = new Set(); // guards against malformed circular refs, keyed by "path#id"
 
   async function emitObject(objEl, transform, ownerObjects, ownerPath){
@@ -1771,6 +1824,7 @@ async function parse3MF(buffer){
         ];
       }
       const triEls = meshEl.getElementsByTagName('triangle');
+      const leafVertStart = positions.length / 3;
       for(let i=0;i<triEls.length;i++){
         const tri = triEls[i];
         const idx = [
@@ -1784,6 +1838,16 @@ async function parse3MF(buffer){
           const tp = applyTransform(p[0],p[1],p[2], transform);
           positions.push(tp[0],tp[1],tp[2]);
         }
+      }
+      const leafVertCount = positions.length/3 - leafVertStart;
+      if(leafVertCount > 0){
+        leafProvenance.push({
+          filePath: ownerPath,
+          objectId: objEl.getAttribute('id'),
+          vertStart: leafVertStart,
+          vertCount: leafVertCount,
+          transform: transform.slice()
+        });
       }
     }
 
@@ -1812,12 +1876,15 @@ async function parse3MF(buffer){
   if(!buildEl) throw new Error('the 3MF file has no <build> section');
   const items = buildEl.getElementsByTagName('item');
   const objectRanges = [];
+  const objectProvenance = []; // parallel to objectRanges: which leaf mesh(es) each top-level object came from
+  const itemInfo = []; // parallel to objectRanges: {itemIndex, itemTransform} — which <item> to redirect on export
   for(let i=0;i<items.length;i++){
     const item = items[i];
     const refId = item.getAttribute('objectid');
     const path = getPathAttr(item);
     const transform = parseTransformAttr(item.getAttribute('transform'));
     const vertStart = positions.length / 3;
+    const leafStart = leafProvenance.length;
     if(path){
       const doc = await loadModelDoc(path);
       const objEl = doc.objects[refId];
@@ -1831,6 +1898,8 @@ async function parse3MF(buffer){
       const friendlyName = objectNames[refId];
       const label = friendlyName ? `${friendlyName} (#${refId})` : `Object ${objectRanges.length+1} (#${refId})`;
       objectRanges.push({ name: label, start: vertStart, count: vertCount });
+      objectProvenance.push(leafProvenance.slice(leafStart, leafProvenance.length));
+      itemInfo.push({ itemIndex: i, itemTransform: transform.slice() });
     }
   }
 
@@ -1840,6 +1909,10 @@ async function parse3MF(buffer){
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
   geo.computeVertexNormals();
   geo.userData.objectRanges = objectRanges;
+  geo.userData.threeMFZip = zip;
+  geo.userData.threeMFRootPath = rootPath;
+  geo.userData.threeMFProvenance = objectProvenance;
+  geo.userData.threeMFItemInfo = itemInfo;
   return geo;
 }
 
@@ -1899,7 +1972,11 @@ function exportOBJ(geometry){
       }
       idx.push(vi);
     }
-    triangles.push(idx);
+    // Welding can occasionally collapse a triangle's own corners onto the
+    // same vertex (from a sliver that clipping produced, or two corners
+    // that were already extremely close) — a zero-area triangle with a
+    // repeated index, which strict 3MF/mesh readers reject outright.
+    if(idx[0] !== idx[1] && idx[0] !== idx[2] && idx[1] !== idx[2]) triangles.push(idx);
   }
 
   let out = '# exported from Stretch\n';
@@ -1938,7 +2015,11 @@ function exportBinarySTL(geometry){
 // root relationship, and a single-object 3D/3dmodel.model. Vertices are
 // deduplicated (unlike the per-triangle STL layout) so the file isn't
 // needlessly 3x larger than it needs to be.
-async function export3MF(geometry){
+// Fallback for when we can't do a lossless patch (see exportPatched3MF) —
+// e.g. this session never actually loaded a real 3MF archive to patch
+// into. Rebuilds the whole file from scratch: correct geometry, but loses
+// materials, colors, metadata, and the original multi-object structure.
+async function exportFlattened3MF(geometry){
   const pos = geometry.attributes.position;
   const arr = pos.array;
 
@@ -1960,6 +2041,7 @@ async function export3MF(geometry){
       }
       idx.push(vi);
     }
+    if(idx[0] === idx[1] || idx[0] === idx[2] || idx[1] === idx[2]) continue; // degenerate after welding — strict readers reject these
     triangles.push(idx);
   }
 
@@ -2005,6 +2087,302 @@ async function export3MF(geometry){
   zip.file('_rels/.rels', relsXML);
   zip.file('3D/3dmodel.model', modelXML);
   return zip.generateAsync({ type:'blob' });
+}
+
+// Maps a CURRENT (possibly deformed) world-space point all the way back to
+// the local coordinate space a specific leaf mesh's <vertex> elements were
+// originally authored in — the exact inverse of the chain applied on
+// import: this object's own 3MF transform, then the global Z-up<->Y-up
+// conversion, then the global recenter. Undone in reverse order.
+function worldPointToLocal(x, y, z, transform){
+  const ux = x + loadedRecenterOffset.x;
+  const uy = y + loadedRecenterOffset.y;
+  const uz = z + loadedRecenterOffset.z;
+  // Undo convertZUpToYUp's (x,y,z) -> (x,z,-y): original x=ux, z=uy, y=-uz
+  const origX = ux, origY = -uz, origZ = uy;
+  const inv = invertTransform(transform);
+  if(!inv) return [origX, origY, origZ]; // degenerate transform (shouldn't happen) — best effort
+  return applyTransform(origX, origY, origZ, inv);
+}
+
+// The primary export path: patches deformed geometry back into a COPY of
+// the exact archive that was loaded, touching only the specific <mesh>
+// elements for objects that were actually changed. Everything else —
+// materials, colors, textures, metadata, other objects, plate layout,
+// thumbnails — survives completely untouched, byte for byte, because we
+// never regenerate it. Returns null if this isn't possible (no original
+// archive to patch, or a shape too complex for the fast path below), in
+// which case the caller should fall back to exportFlattened3MF.
+async function exportPatched3MF(){
+  if(!loaded3MFZip || !loaded3MFRootPath || !loaded3MFItemInfo || !loaded3MFProvenance) return null;
+
+  // Clone the archive so repeated exports each start from the untouched
+  // original, not from a previous export's already-patched copy.
+  const patchedZip = new JSZip();
+  const srcPaths = Object.keys(loaded3MFZip.files);
+  await Promise.all(srcPaths.map(async (path) => {
+    const entry = loaded3MFZip.files[path];
+    if(entry.dir){ patchedZip.folder(path); return; }
+    patchedZip.file(path, await entry.async('uint8array'));
+  }));
+
+  const modifiedIdxs = objectRanges.map((_, i) => i).filter(i => objectModifiedFlags[i]);
+  if(modifiedIdxs.length === 0) return patchedZip.generateAsync({ type:'blob', mimeType:'model/3mf' }); // nothing changed — hand back an exact copy
+
+  const NS = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
+  const PROD_NS = 'http://schemas.microsoft.com/3dmanufacturing/production/2015/06';
+  const arr = mesh.geometry.attributes.position.array;
+
+  function buildMeshXML(xmlDoc, r, localTransform){
+    const vertexMap = new Map();
+    const vertices = [];
+    const triangles = [];
+    const keyFor = (x,y,z) => x.toFixed(6)+','+y.toFixed(6)+','+z.toFixed(6);
+    for(let v=r.start; v<r.start+r.count; v+=3){
+      const idx = [];
+      for(let k=0;k<3;k++){
+        const i = (v+k)*3;
+        const [lx,ly,lz] = worldPointToLocal(arr[i], arr[i+1], arr[i+2], localTransform);
+        const key = keyFor(lx,ly,lz);
+        let vi = vertexMap.get(key);
+        if(vi === undefined){ vi = vertices.length; vertices.push([lx,ly,lz]); vertexMap.set(key, vi); }
+        idx.push(vi);
+      }
+      // Welding can occasionally collapse a triangle's own corners onto
+      // the same vertex (a sliver from clipping, or corners that were
+      // already extremely close) — a zero-area triangle with a repeated
+      // index, which strict 3MF readers like lib3mf (and BambuStudio)
+      // reject outright rather than silently ignoring.
+      if(idx[0] === idx[1] || idx[0] === idx[2] || idx[1] === idx[2]) continue;
+      triangles.push(idx);
+    }
+    const meshEl = xmlDoc.createElementNS(NS, 'mesh');
+    const verticesEl = xmlDoc.createElementNS(NS, 'vertices');
+    for(const vv of vertices){
+      const vEl = xmlDoc.createElementNS(NS, 'vertex');
+      vEl.setAttribute('x', vv[0].toFixed(6));
+      vEl.setAttribute('y', vv[1].toFixed(6));
+      vEl.setAttribute('z', vv[2].toFixed(6));
+      verticesEl.appendChild(vEl);
+    }
+    const trianglesEl = xmlDoc.createElementNS(NS, 'triangles');
+    for(const t of triangles){
+      const tEl = xmlDoc.createElementNS(NS, 'triangle');
+      tEl.setAttribute('v1', t[0]); tEl.setAttribute('v2', t[1]); tEl.setAttribute('v3', t[2]);
+      trianglesEl.appendChild(tEl);
+    }
+    meshEl.appendChild(verticesEl);
+    meshEl.appendChild(trianglesEl);
+    meshEl._actualFaceCount = triangles.length; // exact count after degenerate-triangle filtering, for accurate face_count metadata
+    return meshEl;
+  }
+
+  // How many top-level objects trace back to each exact (file, object id)
+  // leaf mesh — more than one means real 3MF instancing (BambuStudio/
+  // OrcaSlicer commonly reuse one mesh definition across several placed
+  // copies of the same part).
+  const leafRefCount = new Map();
+  objectRanges.forEach((_, i) => {
+    const prov = loaded3MFProvenance[i];
+    if(!prov || prov.length !== 1) return;
+    const key = prov[0].filePath + '::' + prov[0].objectId;
+    leafRefCount.set(key, (leafRefCount.get(key)||0) + 1);
+  });
+
+  // Editing a shared mesh in place would silently deform every instance,
+  // not just the one selected — those get redirected to a private new
+  // object instead (see below). But for the ordinary, non-shared case,
+  // editing the existing mesh in place is far safer: it preserves the
+  // object's id and UUID exactly, along with anything elsewhere in the
+  // archive that references it by that id — such as BambuStudio's own
+  // cut-tool metadata (Metadata/cut_information.xml), which a prior
+  // version of this broke by always minting a new object regardless.
+  // Read the root file once, early — needed regardless of which patching
+  // path each object takes below, since BambuStudio's own per-object
+  // settings file (Metadata/model_settings.config) keys everything by
+  // this same top-level id and needs updating too.
+  const rootFileEntryEarly = patchedZip.file(loaded3MFRootPath);
+  if(!rootFileEntryEarly){ console.warn('[Stretch] could not find', loaded3MFRootPath, 'to patch — falling back.'); return null; }
+  const rootTextEarly = await rootFileEntryEarly.async('text');
+  const rootXmlDoc = new DOMParser().parseFromString(rootTextEarly, 'application/xml');
+  if(rootXmlDoc.getElementsByTagName('parsererror').length){
+    console.warn('[Stretch] could not re-parse', loaded3MFRootPath, 'for patching — falling back.');
+    return null;
+  }
+  const rootBuildEl = rootXmlDoc.getElementsByTagName('build')[0];
+  const rootBuildItems = rootBuildEl && rootBuildEl.getElementsByTagName('item');
+  if(!rootBuildItems){ console.warn('[Stretch] unexpected 3MF structure — falling back.'); return null; }
+
+  const topLevelIdByObjIdx = new Map();
+  for(const objIdx of modifiedIdxs){
+    const info = loaded3MFItemInfo[objIdx];
+    const itemEl = info && rootBuildItems[info.itemIndex];
+    if(!itemEl){ console.warn('[Stretch] could not locate the build item for object', objIdx, '— falling back.'); return null; }
+    topLevelIdByObjIdx.set(objIdx, itemEl.getAttribute('objectid'));
+  }
+  const faceCountByTopLevelId = new Map(); // filled in as each object's mesh is actually built, below
+  const redirectedIdMap = new Map(); // old top-level id -> new id, for objects that got redirected (real 3MF instancing)
+
+  // BambuStudio also tracks a per-part triangle count in its own settings
+  // file, outside the 3MF spec entirely — stale after any deformation
+  // (subdivision changes triangle counts substantially), which is worth
+  // fixing whether or not it's the difference between loading and not.
+  async function patchModelSettingsConfig(){
+    const path = 'Metadata/model_settings.config';
+    const entry = patchedZip.file(path);
+    if(!entry) return; // this file doesn't use Bambu's per-object settings at all
+    const text = await entry.async('text');
+    const xmlDoc = new DOMParser().parseFromString(text, 'application/xml');
+    if(xmlDoc.getElementsByTagName('parsererror').length) return; // leave it stale rather than risk corrupting it
+    const objectEls = xmlDoc.getElementsByTagName('object');
+    for(let i=0;i<objectEls.length;i++){
+      const objEl = objectEls[i];
+      const id = objEl.getAttribute('id');
+      if(!faceCountByTopLevelId.has(id)) continue;
+      const newCount = String(faceCountByTopLevelId.get(id));
+      const metaEls = objEl.getElementsByTagName('metadata');
+      for(let j=0;j<metaEls.length;j++){
+        if(metaEls[j].parentNode === objEl && metaEls[j].hasAttribute('face_count')) metaEls[j].setAttribute('face_count', newCount);
+      }
+      // Multi-part objects can't be cleanly attributed per-part once
+      // subdivision has re-triangulated the whole thing, so only the
+      // (very common) single-part case gets its part-level stat synced.
+      const partEls = objEl.getElementsByTagName('part');
+      if(partEls.length === 1){
+        const statEls = partEls[0].getElementsByTagName('mesh_stat');
+        if(statEls.length === 1) statEls[0].setAttribute('face_count', newCount);
+      }
+    }
+
+    // BambuStudio's plate structure lists which objects belong to which
+    // plate via <model_instance><metadata key="object_id" value="X"/>.
+    // A redirected object's original id is now unused by any build item
+    // (real 3MF instancing — see above), so its plate association has to
+    // move to the new id too, or the new object exists in the build but
+    // belongs to no plate at all.
+    if(redirectedIdMap.size > 0){
+      const allMetaEls = xmlDoc.getElementsByTagName('metadata');
+      for(let i=0;i<allMetaEls.length;i++){
+        const el = allMetaEls[i];
+        if(el.getAttribute('key') === 'object_id' && redirectedIdMap.has(el.getAttribute('value'))){
+          el.setAttribute('value', String(redirectedIdMap.get(el.getAttribute('value'))));
+        }
+      }
+    }
+
+    patchedZip.file(path, new XMLSerializer().serializeToString(xmlDoc));
+  }
+
+  const inPlaceByFile = new Map();  // filePath -> [{objectId, objIdx, transform}]
+  const redirectObjIdxs = [];
+  for(const objIdx of modifiedIdxs){
+    const prov = loaded3MFProvenance[objIdx];
+    if(!prov || prov.length !== 1){ redirectObjIdxs.push(objIdx); continue; } // can't identify a sole owner — safest to redirect
+    const leaf = prov[0];
+    const key = leaf.filePath + '::' + leaf.objectId;
+    if(leafRefCount.get(key) === 1){
+      if(!inPlaceByFile.has(leaf.filePath)) inPlaceByFile.set(leaf.filePath, []);
+      inPlaceByFile.get(leaf.filePath).push({ objectId: leaf.objectId, objIdx, transform: leaf.transform });
+    } else {
+      redirectObjIdxs.push(objIdx);
+    }
+  }
+
+  for(const [filePath, edits] of inPlaceByFile){
+    const fileEntry = patchedZip.file(filePath);
+    if(!fileEntry){ console.warn('[Stretch] could not find', filePath, 'to patch — falling back.'); return null; }
+    const text = await fileEntry.async('text');
+    const xmlDoc = new DOMParser().parseFromString(text, 'application/xml');
+    if(xmlDoc.getElementsByTagName('parsererror').length){
+      console.warn('[Stretch] could not re-parse', filePath, 'for patching — falling back.');
+      return null;
+    }
+    const objectEls = xmlDoc.getElementsByTagName('object');
+    const objectById = {};
+    for(let i=0;i<objectEls.length;i++) objectById[objectEls[i].getAttribute('id')] = objectEls[i];
+
+    for(const { objectId, objIdx, transform } of edits){
+      const objEl = objectById[objectId];
+      const oldMeshEl = objEl && objEl.getElementsByTagName('mesh')[0];
+      if(!objEl || !oldMeshEl){ console.warn('[Stretch] could not find object', objectId, 'in', filePath, '— falling back.'); return null; }
+      const newMeshEl = buildMeshXML(xmlDoc, objectRanges[objIdx], transform);
+      faceCountByTopLevelId.set(topLevelIdByObjIdx.get(objIdx), newMeshEl._actualFaceCount);
+      objEl.replaceChild(newMeshEl, oldMeshEl);
+    }
+
+    patchedZip.file(filePath, new XMLSerializer().serializeToString(xmlDoc));
+  }
+
+  if(redirectObjIdxs.length > 0){
+    const xmlDoc = rootXmlDoc;
+    const resourcesEl = xmlDoc.getElementsByTagName('resources')[0];
+    const buildEl = rootBuildEl;
+    const buildItems = rootBuildItems;
+    if(!resourcesEl){ console.warn('[Stretch] unexpected 3MF structure — falling back.'); return null; }
+
+    const existingIds = new Set();
+    const allObjectEls = xmlDoc.getElementsByTagName('object');
+    for(let i=0;i<allObjectEls.length;i++) existingIds.add(allObjectEls[i].getAttribute('id'));
+    let nextId = 100000;
+    function freshId(){ while(existingIds.has(String(nextId))) nextId++; const id = String(nextId); existingIds.add(id); return id; }
+
+    // BambuStudio/OrcaSlicer's Production Extension convention requires a
+    // p:UUID on every <build>, <item>, and <object> element. A new object
+    // missing this attribute is invalid enough that BambuStudio refuses
+    // to load the file at all — detected by checking whether <build>
+    // itself already carries one, matching this file's own convention.
+    const usesProductionUUIDs = !!(buildEl.getAttributeNS && buildEl.getAttributeNS(PROD_NS, 'UUID'));
+    function generateUUID(){
+      if(typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random()*16|0, v = c==='x' ? r : (r&0x3|0x8);
+        return v.toString(16);
+      });
+    }
+
+    for(const objIdx of redirectObjIdxs){
+      const info = loaded3MFItemInfo[objIdx];
+      if(!info || buildItems[info.itemIndex] === undefined){
+        console.warn('[Stretch] could not locate the build item for object', objIdx, '— falling back.');
+        return null;
+      }
+      const itemEl = buildItems[info.itemIndex];
+      const newMeshEl = buildMeshXML(xmlDoc, objectRanges[objIdx], info.itemTransform);
+      faceCountByTopLevelId.set(topLevelIdByObjIdx.get(objIdx), newMeshEl._actualFaceCount);
+
+      const newId = freshId();
+      redirectedIdMap.set(topLevelIdByObjIdx.get(objIdx), newId);
+      const newObjEl = xmlDoc.createElementNS(NS, 'object');
+      newObjEl.setAttribute('id', newId);
+      if(usesProductionUUIDs) newObjEl.setAttributeNS(PROD_NS, 'p:UUID', generateUUID());
+      newObjEl.setAttribute('type', 'model');
+      newObjEl.appendChild(newMeshEl);
+      resourcesEl.appendChild(newObjEl);
+
+      // This item's own transform still applies (its placement on the
+      // plate hasn't changed) — only which object it points to changes.
+      itemEl.setAttribute('objectid', newId);
+      itemEl.removeAttribute('path');
+      if(itemEl.hasAttributeNS && itemEl.hasAttributeNS(PROD_NS, 'path')) itemEl.removeAttributeNS(PROD_NS, 'path');
+      itemEl.removeAttribute('p:path');
+    }
+
+    patchedZip.file(loaded3MFRootPath, new XMLSerializer().serializeToString(xmlDoc));
+  }
+
+  await patchModelSettingsConfig();
+
+  return patchedZip.generateAsync({ type:'blob', mimeType:'model/3mf' });
+}
+
+async function export3MF(geometry){
+  try {
+    const patched = await exportPatched3MF();
+    if(patched) return patched;
+  } catch(e){
+    console.warn('[Stretch] lossless 3MF patch failed, falling back to full re-export:', e.message);
+  }
+  return exportFlattened3MF(geometry);
 }
 
 // ---------- init ----------
